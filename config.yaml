@@ -1,0 +1,48 @@
+# Scout runtime config. Non-secret settings only: API keys live in .env.
+# Model names use LiteLLM's "provider/model" format so they can be swapped
+# here without code changes. Confirm names and prices on the provider pages
+# before any paid run.
+
+llm:
+  # null = call providers directly. Later: point this at Gearbox
+  # (e.g. http://localhost:8000/v1) and Gearbox picks the model.
+  base_url: null
+  nodes:
+    planner:
+      model: anthropic/claude-sonnet-5-5
+      task_type: plan
+      max_tokens: 800
+      temperature: 0.2
+    researcher:
+      model: anthropic/claude-haiku-5-5
+      task_type: plan
+      max_tokens: 600
+      temperature: 0.0
+    reader:
+      model: anthropic/claude-haiku-5-5
+      task_type: extract
+      max_tokens: 800
+      temperature: 0.0
+    writer:
+      model: anthropic/claude-sonnet-5-5
+      task_type: write
+      max_tokens: 2000
+      temperature: 0.3
+    verifier:
+      model: anthropic/claude-haiku-5-5
+      task_type: verify
+      max_tokens: 1000
+      temperature: 0.0
+    reviser:
+      model: anthropic/claude-sonnet-5-5
+      task_type: write
+      max_tokens: 2000
+      temperature: 0.2
+
+limits:
+  max_steps: 25
+  max_cost_gbp: 0.20
+  timeout_s: 180
+
+# LiteLLM reports cost in USD. Update this when you check the rate.
+usd_to_gbp: 0.79
