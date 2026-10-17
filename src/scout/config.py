@@ -52,10 +52,17 @@ class Limits(BaseModel):
     timeout_s: int = Field(default=180, gt=0)
 
 
+class AuthConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token_ttl_minutes: int = Field(default=60, gt=0, le=24 * 60)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     llm: LLMConfig
+    auth: AuthConfig
     limits: Limits
     usd_to_gbp: float = Field(gt=0)
 
@@ -71,6 +78,10 @@ class Secrets(BaseSettings):
     langfuse_public_key: SecretStr | None = None
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
+    database_url: str = "postgresql+psycopg://scout:scout@localhost:5432/scout"
+    # Signs login tokens. Checked at startup (see auth.require_jwt_secret), not here,
+    # so config-only tools and tests can run without one.
+    jwt_secret: SecretStr | None = None
     log_level: str = "INFO"
     config_path: Path = Path("config.yaml")
 

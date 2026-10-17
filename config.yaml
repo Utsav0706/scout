@@ -39,6 +39,9 @@ llm:
       max_tokens: 2000
       temperature: 0.2
 
+auth:
+  token_ttl_minutes: 60
+
 limits:
   max_steps: 25
   max_cost_gbp: 0.20
