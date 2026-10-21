@@ -18,17 +18,28 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import sessionmaker
 
 from scout import __version__
-from scout.api import routes_auth
+from scout.api import routes_auth, routes_documents
 from scout.auth import require_jwt_secret
 from scout.config import AppConfig, Secrets, get_config, get_secrets
 from scout.db import db_is_up, init_db, make_engine
 from scout.log import setup_logging
+from scout.rag.models_ml import (
+    CrossEncoderReranker,
+    Embedder,
+    Reranker,
+    SentenceTransformerEmbedder,
+)
 from scout.schemas import HealthOut
 
 log = logging.getLogger(__name__)
 
 
-def create_app(secrets: Secrets | None = None, config: AppConfig | None = None) -> FastAPI:
+def create_app(
+    secrets: Secrets | None = None,
+    config: AppConfig | None = None,
+    embedder: Embedder | None = None,
+    reranker: Reranker | None = None,
+) -> FastAPI:
     secrets = secrets or get_secrets()
     config = config or get_config()
     setup_logging(secrets.log_level)
@@ -47,6 +58,9 @@ def create_app(secrets: Secrets | None = None, config: AppConfig | None = None) 
     app.state.jwt_secret = jwt_secret
     app.state.engine = engine
     app.state.session_factory = sessionmaker(engine, expire_on_commit=False)
+    # Real models load lazily on first use; tests pass small fakes instead.
+    app.state.embedder = embedder or SentenceTransformerEmbedder(config.rag.embedding_model)
+    app.state.reranker = reranker or CrossEncoderReranker(config.rag.reranker_model)
 
     @app.middleware("http")
     async def request_log(
@@ -79,4 +93,5 @@ def create_app(secrets: Secrets | None = None, config: AppConfig | None = None) 
         return JSONResponse(body.model_dump(), status_code=200 if db_ok else 503)
 
     app.include_router(routes_auth.router)
+    app.include_router(routes_documents.router)
     return app

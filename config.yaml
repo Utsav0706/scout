@@ -42,6 +42,18 @@ llm:
 auth:
   token_ttl_minutes: 60
 
+rag:
+  # Local models (free, and private documents never leave the machine).
+  # Changing the embedding model means re-embedding all chunks (see models.EMBEDDING_DIM).
+  embedding_model: BAAI/bge-small-en-v1.5
+  reranker_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+  chunk_chars: 1500
+  chunk_overlap_chars: 200
+  candidates: 20   # per search method, before fusion + rerank
+  top_k: 5         # results returned to the caller
+  max_upload_mb: 20
+  max_pages: 300
+
 limits:
   max_steps: 25
   max_cost_gbp: 0.20

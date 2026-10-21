@@ -37,7 +37,10 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e ".[dev]"
+        # CPU-only torch: tests use fake embedders, so the ~2 GB CUDA build is wasted time.
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]"
 
       - name: Lint
         run: |

@@ -36,6 +36,34 @@ class UserOut(BaseModel):
     created_at: datetime
 
 
+class DocumentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    filename: str
+    pages: int
+    created_at: datetime
+
+
+class SearchIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=1000)
+    document_ids: list[uuid.UUID] | None = Field(default=None, max_length=100)
+    top_k: int | None = Field(default=None, gt=0, le=50)
+
+
+class SearchHitOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    chunk_id: uuid.UUID
+    document_id: uuid.UUID
+    filename: str
+    page: int
+    text: str
+    score: float
+
+
 class HealthOut(BaseModel):
     status: Literal["ok", "degraded"]
     db: Literal["ok", "down"]

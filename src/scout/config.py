@@ -58,11 +58,33 @@ class AuthConfig(BaseModel):
     token_ttl_minutes: int = Field(default=60, gt=0, le=24 * 60)
 
 
+class RagConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    embedding_model: str = Field(min_length=1)
+    reranker_model: str = Field(min_length=1)
+    chunk_chars: int = Field(default=1500, ge=200, le=8000)
+    chunk_overlap_chars: int = Field(default=200, ge=0)
+    candidates: int = Field(default=20, gt=0, le=200)
+    top_k: int = Field(default=5, gt=0, le=50)
+    max_upload_mb: int = Field(default=20, gt=0, le=100)
+    max_pages: int = Field(default=300, gt=0)
+
+    @model_validator(mode="after")
+    def overlap_smaller_than_chunk(self) -> RagConfig:
+        if self.chunk_overlap_chars >= self.chunk_chars // 2:
+            raise ValueError("chunk_overlap_chars must be less than half of chunk_chars")
+        if self.top_k > self.candidates:
+            raise ValueError("top_k cannot be larger than candidates")
+        return self
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     llm: LLMConfig
     auth: AuthConfig
+    rag: RagConfig
     limits: Limits
     usd_to_gbp: float = Field(gt=0)
 

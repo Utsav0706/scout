@@ -39,6 +39,9 @@ def init_db(engine: Engine) -> None:
     """
     from scout import models  # noqa: F401  (registers tables on Base.metadata)
 
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine)
 
 

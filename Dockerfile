@@ -9,6 +9,10 @@ WORKDIR /app
 
 # Install dependencies before copying all the code, so Docker reuses this layer
 # when only source files change.
+# CPU-only torch first: the default Linux wheel bundles ~2 GB of CUDA libraries
+# this image never uses (embeddings + reranking run on CPU).
+RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install .
@@ -16,7 +20,8 @@ RUN pip install .
 COPY config.yaml ./
 
 # Don't run as root: if the app is ever compromised, the attacker isn't root in the container.
-RUN useradd --create-home --uid 1000 scout
+RUN useradd --create-home --uid 1000 scout \
+    && mkdir -p /home/scout/.cache/huggingface && chown -R scout /home/scout/.cache
 USER scout
 
 EXPOSE 8000

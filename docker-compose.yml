@@ -28,10 +28,15 @@ services:
       DATABASE_URL: postgresql+psycopg://scout:scout@db:5432/scout
     ports:
       - "8000:8000"
+    volumes:
+      # Keep downloaded embedding/reranker models (~200 MB) between container restarts.
+      - hf_cache:/home/scout/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
-    mem_limit: 512m
+    # Embedding + reranker models need ~400 MB on top of the API itself.
+    mem_limit: 1g
 
 volumes:
   pgdata:
+  hf_cache:

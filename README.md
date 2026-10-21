@@ -7,8 +7,8 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M1 — backend foundation.** API with sign-up/login (JWT) and a health check.
-No research yet.
+Status: **M2 — document store.** Sign-up/login, PDF upload, and hybrid search over your
+own documents. No research agent yet.
 
 ## Run it
 
@@ -26,6 +26,24 @@ Then open http://localhost:8000/docs for the interactive API docs.
 | `POST /auth/register` | `{email, password}` → creates a user |
 | `POST /auth/login` | `{email, password}` → `{access_token, expires_in}` |
 | `GET /auth/me` | Needs `Authorization: Bearer <token>` |
+| `POST /documents` | Upload a PDF (multipart `file`, max 20 MB) → chunked + embedded |
+| `GET /documents` | Your uploaded documents |
+| `POST /documents/search` | `{query, document_ids?, top_k?}` → best chunks with page numbers |
+
+The first upload or search downloads two small local models (~200 MB total) from
+Hugging Face; after that they are cached.
+
+### How search works
+
+```
+query ──► embed (bge-small) ──► pgvector cosine top 20 ──┐
+     └──► Postgres full-text (websearch_to_tsquery) top 20 ─┴─► RRF fuse ──► cross-encoder rerank ──► top 5
+```
+
+Vectors catch paraphrases ("money back" ≈ "refund"); keywords catch exact names, codes
+and numbers. RRF merges the two ranked lists without having to compare their raw scores.
+The cross-encoder then reads query + chunk together to put the best ones first. Every
+search is limited to the caller's own documents.
 
 ## Dev setup
 
@@ -40,7 +58,16 @@ copy .env.example .env
 
 Set `JWT_SECRET` in `.env` (instructions are in the file).
 
-Check everything (tests use in-memory SQLite locally; CI runs them on real Postgres):
+Check everything. Locally, tests use in-memory SQLite and skip the search tests (they
+need pgvector). CI runs everything on real Postgres. To run them locally with Docker:
+
+```bash
+docker compose up -d db
+set TEST_DATABASE_URL=postgresql+psycopg://scout:scout@localhost:5432/scout
+pytest
+```
+
+Lint and test:
 
 ```bash
 ruff check .

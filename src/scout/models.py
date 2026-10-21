@@ -5,10 +5,25 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
-from sqlalchemy.orm import Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    DDL,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from scout.db import Base
+
+# Must match the embedding model in config.yaml (bge-small-en-v1.5 outputs 384 numbers).
+# Changing models means re-embedding every chunk, so this is a code change, not config.
+EMBEDDING_DIM = 384
 
 
 class User(Base):
@@ -20,3 +35,52 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Document(Base):
+    __tablename__ = "documents"
+    # Same file uploaded twice by one user is a duplicate; two users may share a file.
+    __table_args__ = (UniqueConstraint("owner_id", "sha256", name="uq_documents_owner_sha256"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    filename: Mapped[str] = mapped_column(String(255))
+    sha256: Mapped[str] = mapped_column(String(64))
+    pages: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    chunks: Mapped[list[Chunk]] = relationship(
+        back_populates="document", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class Chunk(Base):
+    __tablename__ = "chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    ord: Mapped[int] = mapped_column(Integer)  # position within the document
+    page: Mapped[int] = mapped_column(Integer)  # 1-based, so citations can say "p. 4"
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+
+    document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+# Postgres-only search indexes. Added via DDL events so the same models still create
+# plain tables on the SQLite test DB.
+#  - HNSW: approximate nearest-neighbour index for cosine distance. Better recall/speed
+#    trade-off than IVFFlat and needs no training step, so it works on an empty table.
+#  - GIN on to_tsvector: makes full-text (keyword) search fast. An expression index
+#    rather than a stored tsvector column keeps the table simpler.
+for ddl in (
+    "CREATE INDEX IF NOT EXISTS ix_chunks_embedding_hnsw "
+    "ON chunks USING hnsw (embedding vector_cosine_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_chunks_text_fts "
+    "ON chunks USING gin (to_tsvector('english', text))",
+):
+    event.listen(Chunk.__table__, "after_create", DDL(ddl).execute_if(dialect="postgresql"))
