@@ -54,6 +54,14 @@ rag:
   max_upload_mb: 20
   max_pages: 300
 
+tools:
+  tool_timeout_s: 30        # hard cap on any single tool call
+  http_timeout_s: 15
+  search_max_results: 5     # Tavily: 1 credit per basic search (free tier: 1,000/month)
+  fetch_max_bytes: 2000000  # stop downloading a page after ~2 MB
+  fetch_max_chars: 20000    # cleaned text returned to the agent
+  max_redirects: 5
+
 limits:
   max_steps: 25
   max_cost_gbp: 0.20

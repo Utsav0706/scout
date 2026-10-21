@@ -10,6 +10,7 @@ import json
 import logging
 import sys
 from datetime import UTC, datetime
+from typing import TextIO
 
 # Attributes every LogRecord has. Anything else came from `extra=` and gets logged as a field.
 _STANDARD_ATTRS = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime", "taskName"}
@@ -29,8 +30,10 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def setup_logging(level: str = "INFO") -> None:
-    handler = logging.StreamHandler(sys.stdout)
+def setup_logging(level: str = "INFO", stream: TextIO | None = None) -> None:
+    """stream defaults to stdout. The stdio MCP server passes stderr, because its
+    stdout carries the MCP protocol and a stray log line would corrupt it."""
+    handler = logging.StreamHandler(stream or sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers = [handler]

@@ -8,6 +8,7 @@ from datetime import datetime
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     DDL,
+    JSON,
     DateTime,
     ForeignKey,
     Integer,
@@ -84,3 +85,35 @@ for ddl in (
     "ON chunks USING gin (to_tsvector('english', text))",
 ):
     event.listen(Chunk.__table__, "after_create", DDL(ddl).execute_if(dialect="postgresql"))
+
+
+class ToolCall(Base):
+    """Audit log: one row per tool call the agent makes, successful or not.
+
+    job_id has no foreign key yet: the research jobs table arrives in M6.
+    """
+
+    __tablename__ = "tool_calls"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    tool: Mapped[str] = mapped_column(String(64))
+    args: Mapped[dict] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(16))  # "ok" | "error"
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_chars: Mapped[int] = mapped_column(Integer, default=0)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Note(Base):
+    """A fact the agent saved while researching, tied to the source it came from."""
+
+    __tablename__ = "notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(index=True)
+    source_id: Mapped[str] = mapped_column(String(16))  # "S3": per-job id from the tools
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

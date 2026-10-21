@@ -79,12 +79,24 @@ class RagConfig(BaseModel):
         return self
 
 
+class ToolsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    tool_timeout_s: float = Field(default=30, gt=0, le=120)
+    http_timeout_s: float = Field(default=15, gt=0, le=60)
+    search_max_results: int = Field(default=5, gt=0, le=20)
+    fetch_max_bytes: int = Field(default=2_000_000, gt=0, le=20_000_000)
+    fetch_max_chars: int = Field(default=20_000, gt=0, le=200_000)
+    max_redirects: int = Field(default=5, ge=0, le=10)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     llm: LLMConfig
     auth: AuthConfig
     rag: RagConfig
+    tools: ToolsConfig
     limits: Limits
     usd_to_gbp: float = Field(gt=0)
 
