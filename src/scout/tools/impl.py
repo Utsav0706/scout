@@ -98,11 +98,32 @@ async def web_search(ctx: ToolContext, query: str) -> list[WebResult]:
     return results
 
 
+def _decode(data: bytes, declared: str) -> str:
+    """Decode with the page's declared charset, falling back to Windows-1252.
+
+    Plenty of sites say "utf-8" but send Windows-1252 curly quotes (seen live:
+    "UK�s"). Windows-1252 is the usual real encoding in that case.
+    """
+    try:
+        return data.decode(declared)
+    except UnicodeDecodeError as exc:
+        if exc.start >= len(data) - 3:
+            # Only the last few bytes failed: the size cap cut a character in half.
+            return data[: exc.start].decode(declared)
+    except LookupError:
+        pass  # unknown charset name from the server
+    try:
+        return data.decode("cp1252")
+    except UnicodeDecodeError:
+        return data.decode("utf-8", errors="replace")
+
+
 def _html_to_text(html: str) -> tuple[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     title = soup.title.get_text(strip=True) if soup.title else ""
-    # Drop code, styling and page chrome; keep the readable body.
-    for tag in soup(["script", "style", "noscript", "svg", "nav", "footer", "header", "form"]):
+    # Drop code, styling and page chrome; keep the readable body. Not <form>: ASP.NET
+    # sites wrap the whole page in one form, so removing it deletes all the content.
+    for tag in soup(["script", "style", "noscript", "svg", "nav", "footer", "header"]):
         tag.decompose()
     text = soup.get_text("\n", strip=True)
     return title, _BLANK_LINES.sub("\n\n", text)
@@ -151,7 +172,7 @@ async def fetch_url(ctx: ToolContext, url: str) -> PageResult:
                 "Try a different source."
             ) from None
 
-        raw = bytes(body[: ctx.cfg.fetch_max_bytes]).decode(encoding, errors="replace")
+        raw = _decode(bytes(body[: ctx.cfg.fetch_max_bytes]), encoding)
         title, text = _html_to_text(raw) if ctype != "text/plain" else ("", raw.strip())
         if not text:
             raise ToolError(f"fetch_url found no readable text on {current}.")

@@ -188,6 +188,35 @@ async def test_fetch_url_returns_clean_text(db_factory) -> None:
 
 
 @pytest.mark.anyio
+async def test_page_wrapped_in_a_form_keeps_its_content(db_factory) -> None:
+    # ASP.NET sites (found live on tradingeconomics.com) put the whole body in <form>.
+    page_html = (
+        "<html><head><title>UK CPI</title></head><body><form id='aspnetForm'>"
+        "<h1>UK inflation</h1><p>CPI rose 3.8% in the 12 months to September.</p>"
+        "</form></body></html>"
+    )
+    ctx = make_ctx(
+        db_factory,
+        lambda r: httpx.Response(200, headers={"content-type": "text/html"}, text=page_html),
+    )
+    page = await impl.fetch_url(ctx, "https://example.com/cpi")
+    assert "CPI rose 3.8%" in page.text
+
+
+@pytest.mark.parametrize(
+    ("data", "declared", "expected"),
+    [
+        ("UK’s rate".encode(), "utf-8", "UK’s rate"),
+        ("UK’s rate".encode("cp1252"), "utf-8", "UK’s rate"),  # mislabelled page
+        ("café".encode()[:-1], "utf-8", "caf"),  # size cap split the last character
+        (b"plain", "no-such-charset", "plain"),
+    ],
+)
+def test_decode_handles_real_world_charsets(data: bytes, declared: str, expected: str) -> None:
+    assert impl._decode(data, declared) == expected
+
+
+@pytest.mark.anyio
 async def test_fetched_page_keeps_its_search_source_id(db_factory) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.host == "api.tavily.com":
