@@ -337,3 +337,29 @@ def test_sources_picked_round_robin_and_unique() -> None:
 
     evidence = [ev("S1", "a"), ev("S2", "a"), ev("S3", "a"), ev("S1", "b"), ev("S4", "b")]
     assert [e.source_id for e in _pick_sources(evidence, 3)] == ["S1", "S4", "S2"]
+
+
+@pytest.mark.anyio
+async def test_pages_read_via_tavily_extract_are_counted(db_factory) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "api.tavily.com" and req.url.path == "/extract":
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "url": "u",
+                            "raw_content": "Official statistics page about extracted text.",
+                        }
+                    ]
+                },
+            )
+        if req.url.host == "api.tavily.com":
+            return web(req)
+        return httpx.Response(403)  # every site refuses the direct fetch
+
+    report, _, _ = await run(db_factory, handler=handler)
+    extracts = [s for s in report.steps if s.detail == "via tavily_extract"]
+    assert len(extracts) == 2  # one page per sub-question
+    assert report.status == "complete"
+    assert "Tavily: 2 searches + 2 pages via Extract" in to_markdown(report)

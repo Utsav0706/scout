@@ -80,7 +80,20 @@ async def tool_call(
             name=name,
             ok=ok,
             ms=int((time.perf_counter() - start) * 1000),
-            detail=None if ok else text[:300],
+            detail=_detail(ok, structured, text),
         )
     )
     return ok, structured, text
+
+
+EXTRACT_DETAIL = "via tavily_extract"
+
+
+def _detail(ok: bool, structured: Any, text: str) -> str | None:
+    if not ok:
+        return text[:300]
+    # Pages read through Tavily Extract cost credits: record them so a run's credit use
+    # can be counted from its steps.
+    if isinstance(structured, dict) and structured.get("via") == "tavily_extract":
+        return EXTRACT_DETAIL
+    return None

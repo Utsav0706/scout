@@ -116,8 +116,11 @@ def to_markdown(report: Report) -> str:
         )
     llm_calls = sum(1 for s in report.steps if s.kind == "llm")
     tool_calls = sum(1 for s in report.steps if s.kind == "tool")
+    searches = sum(1 for s in report.steps if s.name == "web_search" and s.ok)
+    extracts = sum(1 for s in report.steps if s.detail == "via tavily_extract")
     lines.append(
         f"_Cost £{report.cost_gbp:.4f} · {report.latency_s:.1f}s · "
-        f"{llm_calls} model calls · {tool_calls} tool calls_"
+        f"{llm_calls} model calls · {tool_calls} tool calls · "
+        f"Tavily: {searches} searches + {extracts} pages via Extract_"
     )
     return "\n".join(lines)

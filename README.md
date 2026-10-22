@@ -80,9 +80,19 @@ Sub-questions that ended with no sources read, or whose claims all failed, get *
 more research round with a hint to search differently (only if £0.10+ of budget is left).
 A per-job fetch cache stops parallel researchers re-downloading, or re-trying, the same URL.
 
-**Known limitation:** many UK policy sites (parliament.uk, health.org.uk, ...) answer 403
-to non-browser clients, and `fetch_url` can't read PDFs, so some questions end with few
-pages read. Scout reports this under limitations rather than guessing.
+**Blocked pages and PDFs:** many UK policy sites (parliament.uk, health.org.uk, ...)
+answer 403 to non-browser clients, and HTML parsing can't read PDFs. When the direct fetch
+is refused (401/403/406/429/451) or returns a non-HTML file, `fetch_url` reads the page
+through [Tavily Extract](https://docs.tavily.com) instead (1 credit per 5 successful
+pages; failures free). Scout never disguises its own client as a browser. Never used for
+404s, timeouts, or URLs the SSRF guard refused. Same NHS question, before/after:
+
+| | fetches that worked | pages read | claims | unanswered sub-questions | cost |
+|---|---|---|---|---|---|
+| without fallback | 3 / 13 | 2 | 13 | 1 | £0.027 |
+| with fallback | 7 / 7 | 6 | 19 | 0 | £0.038 |
+
+Each report's footer shows its Tavily use (searches + pages via Extract).
 
 ## Run it
 

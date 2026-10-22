@@ -50,6 +50,9 @@ class SourceRegistry:
     def get(self, source_id: str) -> Source | None:
         return next((s for s in self._by_key.values() if s.id == source_id), None)
 
+    def get_by_key(self, key: str) -> Source | None:
+        return self._by_key.get(key)
+
     def all(self) -> list[Source]:
         return list(self._by_key.values())
 

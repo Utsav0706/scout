@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from typing import Literal
 from urllib.parse import urljoin
 
 import anyio
@@ -25,8 +26,17 @@ from scout.tools.context import ToolContext
 from scout.tools.netguard import BlockedURLError, check_url
 
 TAVILY_URL = "https://api.tavily.com/search"
+TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
 _TEXT_TYPES = ("text/html", "application/xhtml+xml", "text/plain")
 _BLANK_LINES = re.compile(r"\n\s*\n+")
+# Answers meaning "this site won't serve us" (as opposed to "this page doesn't exist").
+_REFUSED = {401, 403, 406, 429, 451}
+
+
+class FetchRefusedError(ToolError):
+    """The direct fetch was refused (403 etc.) or returned a format we can't parse
+    (e.g. PDF): worth handing to Tavily Extract. Not raised for 404s, timeouts or URLs
+    our SSRF guard blocked: extraction wouldn't help those, or must not be tried."""
 
 
 class WebResult(BaseModel):
@@ -42,6 +52,7 @@ class PageResult(BaseModel):
     url: str
     text: str
     truncated: bool
+    via: Literal["direct", "tavily_extract"] = "direct"  # tavily_extract costs credits
 
 
 class DocResult(BaseModel):
@@ -141,7 +152,7 @@ async def fetch_url(ctx: ToolContext, url: str) -> PageResult:
     task = ctx.fetch_cache.get(url)
     first = task is None
     if first:
-        task = asyncio.ensure_future(_fetch_url_uncached(ctx, url))
+        task = asyncio.ensure_future(_fetch_with_fallback(ctx, url))
         ctx.fetch_cache[url] = task
     try:
         # shield: one caller hitting its tool timeout mustn't cancel the shared download.
@@ -150,6 +161,56 @@ async def fetch_url(ctx: ToolContext, url: str) -> PageResult:
         if first:
             raise
         raise ToolError(f"{exc} (Already tried in this research; pick another source.)") from None
+
+
+async def _fetch_with_fallback(ctx: ToolContext, url: str) -> PageResult:
+    try:
+        return await _fetch_url_uncached(ctx, url)
+    except FetchRefusedError as exc:
+        if not (ctx.tavily_api_key and ctx.cfg.extract_fallback):
+            raise
+        return await _tavily_extract(ctx, url, exc)
+
+
+async def _tavily_extract(ctx: ToolContext, url: str, direct_error: ToolError) -> PageResult:
+    """Read a page through Tavily Extract: for sites that refuse non-browser clients and
+    for PDFs. Tavily is a content provider whose job is fetching pages; we don't try to
+    disguise our own client. Basic extract: 1 credit per 5 successful pages, failures free.
+    """
+
+    def failed(why: str) -> ToolError:
+        return ToolError(f"{direct_error} Tavily extract also failed: {why}.")
+
+    try:
+        resp = await ctx.http.post(
+            TAVILY_EXTRACT_URL,
+            headers={"Authorization": f"Bearer {ctx.tavily_api_key}"},
+            json={"urls": [url], "extract_depth": "basic", "format": "text"},
+            timeout=ctx.cfg.http_timeout_s,
+        )
+    except httpx.HTTPError as exc:
+        raise failed(type(exc).__name__) from None
+    if resp.status_code >= 400:
+        raise failed(f"HTTP {resp.status_code}")
+    data = resp.json()
+    content = next((r.get("raw_content") or "" for r in data.get("results", [])), "").strip()
+    if not content:
+        reasons = [r.get("error", "") for r in data.get("failed_results", [])]
+        raise failed(reasons[0] if reasons and reasons[0] else "no content returned")
+
+    text = _BLANK_LINES.sub("\n\n", content)
+    known = ctx.sources.get_by_key(url)  # keep the title web_search gave it, if any
+    title = known.title if known else url
+    src = ctx.sources.register(url, title, url)
+    limit = ctx.cfg.fetch_max_chars
+    return PageResult(
+        source_id=src.id,
+        title=title,
+        url=url,
+        text=text[:limit],
+        truncated=len(text) > limit,
+        via="tavily_extract",
+    )
 
 
 async def _fetch_url_uncached(ctx: ToolContext, url: str) -> PageResult:
@@ -171,13 +232,14 @@ async def _fetch_url_uncached(ctx: ToolContext, url: str) -> PageResult:
                     current = urljoin(current, resp.headers["location"])
                     continue
                 if resp.status_code >= 400:
-                    raise ToolError(
+                    error = FetchRefusedError if resp.status_code in _REFUSED else ToolError
+                    raise error(
                         f"fetch_url got HTTP {resp.status_code} from {current}. "
                         "Try a different source."
                     )
                 ctype = resp.headers.get("content-type", "").split(";")[0].strip().lower()
                 if ctype not in _TEXT_TYPES:
-                    raise ToolError(
+                    raise FetchRefusedError(
                         f"fetch_url can only read web pages, not '{ctype or 'unknown'}'. "
                         "Try a different source."
                     )

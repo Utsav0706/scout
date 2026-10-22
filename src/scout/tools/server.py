@@ -155,8 +155,8 @@ def build_server(ctx: ToolContext) -> MCPServer:
 
     @server.tool(
         description=(
-            "Read a web page and return its main text (up to 20,000 characters). Only "
-            "public http/https pages; PDFs, images and internal addresses are refused."
+            "Read a web page or PDF and return its main text (up to 20,000 characters). "
+            "Only public http/https addresses; internal addresses are refused."
         )
     )
     async def fetch_url(

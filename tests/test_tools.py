@@ -247,10 +247,11 @@ async def test_redirect_loop_gives_up(db_factory) -> None:
 
 
 @pytest.mark.anyio
-async def test_non_html_refused(db_factory) -> None:
+async def test_non_html_refused_without_extract_fallback(db_factory) -> None:
     ctx = make_ctx(
         db_factory,
         lambda r: httpx.Response(200, headers={"content-type": "application/pdf"}, content=b"%PDF"),
+        key=None,  # no Tavily key: no fallback
     )
     with pytest.raises(ToolError, match="application/pdf"):
         await impl.fetch_url(ctx, "https://example.com/file.pdf")
@@ -431,7 +432,7 @@ def counting(handler):
 @pytest.mark.anyio
 async def test_failed_url_is_not_requested_again(db_factory) -> None:
     handler, calls = counting(lambda r: httpx.Response(403))
-    ctx = make_ctx(db_factory, lambda r: html("x"))
+    ctx = make_ctx(db_factory, lambda r: html("x"), key=None)
     ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     with pytest.raises(ToolError, match="HTTP 403"):
         await impl.fetch_url(ctx, "https://example.com/blocked")
@@ -460,3 +461,124 @@ async def test_simultaneous_requests_share_one_download(db_factory) -> None:
     )
     assert calls["n"] == 1
     assert len({p.source_id for p in pages}) == 1
+
+
+# --- Tavily Extract fallback (403s and PDFs) ---
+
+
+def site_and_extract(site_status: int = 403, ctype: str = "text/html", extract=None):
+    """Fake web: the site answers `site_status`/`ctype`; Tavily Extract answers `extract`."""
+    seen: dict = {"extract_bodies": [], "site_calls": 0}
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.host == "api.tavily.com" and req.url.path == "/extract":
+            seen["extract_bodies"].append(json.loads(req.content))
+            seen["auth"] = req.headers["authorization"]
+            return extract or httpx.Response(
+                200,
+                json={
+                    "results": [{"url": "u", "raw_content": "Extracted   text.\n\n\n\nMore text."}],
+                    "failed_results": [],
+                },
+            )
+        if req.url.host == "api.tavily.com":
+            return tavily("https://example.com/report")
+        seen["site_calls"] += 1
+        if site_status != 200:
+            return httpx.Response(site_status)
+        return httpx.Response(200, headers={"content-type": ctype}, content=b"%PDF-1.7 ...")
+
+    return handler, seen
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [401, 403, 406, 429, 451])
+async def test_refused_page_is_read_via_tavily_extract(db_factory, status: int) -> None:
+    handler, seen = site_and_extract(site_status=status)
+    ctx = make_ctx(db_factory, handler)
+    page = await impl.fetch_url(ctx, "https://example.com/blocked")
+    assert page.via == "tavily_extract"
+    assert page.text == "Extracted   text.\n\nMore text."  # blank-line runs collapsed
+    assert seen["extract_bodies"] == [
+        {"urls": ["https://example.com/blocked"], "extract_depth": "basic", "format": "text"}
+    ]
+    assert seen["auth"] == "Bearer tvly-test"
+
+
+@pytest.mark.anyio
+async def test_pdf_is_read_via_tavily_extract(db_factory) -> None:
+    handler, _ = site_and_extract(site_status=200, ctype="application/pdf")
+    page = await impl.fetch_url(make_ctx(db_factory, handler), "https://example.com/r.pdf")
+    assert page.via == "tavily_extract"
+
+
+@pytest.mark.anyio
+async def test_extracted_page_keeps_its_search_title_and_source_id(db_factory) -> None:
+    handler, _ = site_and_extract()
+    ctx = make_ctx(db_factory, handler)
+    [hit] = await impl.web_search(ctx, "report")
+    page = await impl.fetch_url(ctx, hit.url)
+    assert (page.source_id, page.title) == (hit.source_id, hit.title)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("status", [404, 500])
+async def test_missing_or_broken_pages_are_not_sent_to_extract(db_factory, status: int) -> None:
+    handler, seen = site_and_extract(site_status=status)
+    with pytest.raises(ToolError, match=f"HTTP {status}"):
+        await impl.fetch_url(make_ctx(db_factory, handler), "https://example.com/gone")
+    assert seen["extract_bodies"] == []
+
+
+@pytest.mark.anyio
+async def test_ssrf_blocked_urls_are_never_sent_to_extract(db_factory) -> None:
+    handler, seen = site_and_extract()
+    with pytest.raises(ToolError, match="private or internal"):
+        await impl.fetch_url(make_ctx(db_factory, handler), "http://169.254.169.254/latest/")
+    assert seen["extract_bodies"] == []
+
+
+@pytest.mark.anyio
+async def test_extract_disabled_in_config_means_no_fallback(db_factory) -> None:
+    handler, seen = site_and_extract()
+    ctx = make_ctx(db_factory, handler, extract_fallback=False)
+    with pytest.raises(ToolError, match="HTTP 403"):
+        await impl.fetch_url(ctx, "https://example.com/blocked")
+    assert seen["extract_bodies"] == []
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("reply", "why"),
+    [
+        (
+            httpx.Response(
+                200,
+                json={
+                    "results": [],
+                    "failed_results": [{"url": "u", "error": "Failed to fetch url"}],
+                },
+            ),
+            "Failed to fetch url",
+        ),
+        (httpx.Response(432, json={}), "HTTP 432"),
+        (
+            httpx.Response(200, json={"results": [{"url": "u", "raw_content": "  "}]}),
+            "no content returned",
+        ),
+    ],
+)
+async def test_extract_failure_reports_both_errors(db_factory, reply, why: str) -> None:
+    handler, _ = site_and_extract(extract=reply)
+    with pytest.raises(ToolError) as err:
+        await impl.fetch_url(make_ctx(db_factory, handler), "https://example.com/blocked")
+    assert "HTTP 403" in str(err.value) and why in str(err.value)
+
+
+@pytest.mark.anyio
+async def test_extract_result_is_cached_too(db_factory) -> None:
+    handler, seen = site_and_extract()
+    ctx = make_ctx(db_factory, handler)
+    await impl.fetch_url(ctx, "https://example.com/blocked")
+    await impl.fetch_url(ctx, "https://example.com/blocked")
+    assert (seen["site_calls"], len(seen["extract_bodies"])) == (1, 1)  # one credit, not two

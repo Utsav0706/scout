@@ -104,6 +104,7 @@ class ToolsConfig(BaseModel):
     fetch_max_bytes: int = Field(default=2_000_000, gt=0, le=20_000_000)
     fetch_max_chars: int = Field(default=20_000, gt=0, le=200_000)
     max_redirects: int = Field(default=5, ge=0, le=10)
+    extract_fallback: bool = True
 
 
 class AgentConfig(BaseModel):
