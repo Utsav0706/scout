@@ -20,20 +20,25 @@ NodeName = Literal["planner", "researcher", "reader", "writer", "verifier", "rev
 TaskType = Literal["plan", "extract", "write", "verify"]
 
 
+Effort = Literal["low", "medium", "high"]
+
+
 class NodeModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str = Field(min_length=1)
     task_type: TaskType
-    # Hard cap so a single call can never produce a surprise bill.
-    max_tokens: int = Field(gt=0, le=4000)
-    temperature: float = Field(default=0.0, ge=0.0, le=1.0)
+    effort: Effort = "medium"
+    # Hard ceiling per call (thinking tokens included), so one call can't run up a bill.
+    max_tokens: int = Field(gt=0, le=16_000)
+    fallback: bool = False
 
 
 class LLMConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     base_url: str | None = None
+    request_timeout_s: float = Field(default=120, gt=0, le=600)
     nodes: dict[NodeName, NodeModel]
 
     @model_validator(mode="after")
@@ -42,6 +47,17 @@ class LLMConfig(BaseModel):
         if missing:
             raise ValueError(f"config.yaml is missing models for nodes: {sorted(missing)}")
         return self
+
+
+class ModelPrice(BaseModel):
+    """USD per million tokens."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input: float = Field(ge=0)
+    output: float = Field(ge=0)
+    cache_read: float = Field(ge=0)
+    cache_write: float = Field(ge=0)
 
 
 class Limits(BaseModel):
@@ -98,7 +114,16 @@ class AppConfig(BaseModel):
     rag: RagConfig
     tools: ToolsConfig
     limits: Limits
+    prices_usd_per_mtok: dict[str, ModelPrice]
     usd_to_gbp: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def every_model_has_a_price(self) -> AppConfig:
+        # Without a price, cost tracking (and the max_cost_gbp guard) would silently read 0.
+        unpriced = {n.model for n in self.llm.nodes.values()} - set(self.prices_usd_per_mtok)
+        if unpriced:
+            raise ValueError(f"prices_usd_per_mtok is missing: {sorted(unpriced)}")
+        return self
 
 
 class Secrets(BaseSettings):

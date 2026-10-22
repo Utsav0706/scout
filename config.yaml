@@ -1,43 +1,59 @@
 # Scout runtime config. Non-secret settings only: API keys live in .env.
-# Model names use LiteLLM's "provider/model" format so they can be swapped
-# here without code changes. Confirm names and prices on the provider pages
-# before any paid run.
+# Model ids are Anthropic's exact ids (no date suffixes). Prices are below in
+# `prices_usd_per_mtok`; check them on the Anthropic pricing page before paid runs.
 
 llm:
-  # null = call providers directly. Later: point this at Gearbox
-  # (e.g. http://localhost:8000/v1) and Gearbox picks the model.
+  # null = call Anthropic directly. Later: point this at Gearbox and it picks the model.
   base_url: null
+  request_timeout_s: 120
   nodes:
+    # effort (low|medium|high) replaces temperature: Sonnet 5.5 / Haiku 5.5 reject
+    # non-default sampling settings. It sets how hard the model thinks, and so how
+    # many tokens it spends.
+    # max_tokens includes thinking tokens, so it is a ceiling, not the expected length.
+    # fallback: on a safety-classifier refusal, Anthropic re-runs the request on its
+    # recommended fallback model (Sonnet only; Haiku has no server-side fallback).
     planner:
-      model: anthropic/claude-sonnet-5-5
+      model: claude-sonnet-5-5
       task_type: plan
-      max_tokens: 800
-      temperature: 0.2
+      effort: medium
+      max_tokens: 4000
+      fallback: true
     researcher:
-      model: anthropic/claude-haiku-5-5
+      model: claude-haiku-5-5
       task_type: plan
-      max_tokens: 600
-      temperature: 0.0
+      effort: low
+      max_tokens: 2000
     reader:
-      model: anthropic/claude-haiku-5-5
+      model: claude-haiku-5-5
       task_type: extract
-      max_tokens: 800
-      temperature: 0.0
+      effort: low
+      max_tokens: 3000
     writer:
-      model: anthropic/claude-sonnet-5-5
+      model: claude-sonnet-5-5
       task_type: write
-      max_tokens: 2000
-      temperature: 0.3
+      effort: medium
+      max_tokens: 8000
+      fallback: true
     verifier:
-      model: anthropic/claude-haiku-5-5
+      model: claude-haiku-5-5
       task_type: verify
-      max_tokens: 1000
-      temperature: 0.0
+      effort: low
+      max_tokens: 3000
     reviser:
-      model: anthropic/claude-sonnet-5-5
+      model: claude-sonnet-5-5
       task_type: write
-      max_tokens: 2000
-      temperature: 0.2
+      effort: medium
+      max_tokens: 8000
+      fallback: true
+
+# USD per million tokens (Anthropic first-party API, checked 2026-10-22).
+# Thinking tokens are billed as output. Cache rows are used only once prompt caching is on.
+# claude-sonnet-5 is listed because it is the server-side fallback for Sonnet 5.5.
+prices_usd_per_mtok:
+  claude-sonnet-5-5: {input: 2.00, output: 10.00, cache_read: 0.20, cache_write: 2.50}
+  claude-sonnet-5:   {input: 2.00, output: 10.00, cache_read: 0.20, cache_write: 2.50}
+  claude-haiku-5-5:  {input: 0.10, output: 0.50, cache_read: 0.01, cache_write: 0.125}
 
 auth:
   token_ttl_minutes: 60
@@ -67,5 +83,5 @@ limits:
   max_cost_gbp: 0.20
   timeout_s: 180
 
-# LiteLLM reports cost in USD. Update this when you check the rate.
+# Anthropic bills in USD. Update this when you check the rate.
 usd_to_gbp: 0.79

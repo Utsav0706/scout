@@ -7,8 +7,9 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M3 — MCP tools.** Sign-up/login, PDF upload + hybrid search, and the agent's
-four tools served over MCP. No research agent yet.
+Status: **M4a — LLM client.** Sign-up/login, PDF upload + hybrid search, the agent's
+four tools served over MCP, and one priced LLM client for every agent step. No research
+agent yet.
 
 ## Run it
 
