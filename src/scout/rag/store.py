@@ -15,7 +15,7 @@ from scout.models import Chunk, Document
 from scout.rag.chunk import chunk_pages
 from scout.rag.fusion import reciprocal_rank_fusion
 from scout.rag.models_ml import Embedder, Reranker
-from scout.rag.pdf import extract_pages
+from scout.rag.pdf import InvalidPDFError, extract_pages
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,60 @@ class SearchHit:
     score: float  # reranker score: higher = more relevant; only comparable within one query
 
 
+class NotAPDFError(ValueError):
+    pass
+
+
+def create_upload(db: Session, owner_id: uuid.UUID, filename: str, data: bytes) -> Document:
+    """Store an upload for processing. Only the instant checks happen here (is it a PDF,
+    is it a duplicate); extraction, chunking and embedding run in a worker."""
+    # Check the magic bytes ourselves: the client's content-type header can say anything.
+    if not data.startswith(b"%PDF-"):
+        raise NotAPDFError("File is not a PDF")
+    sha256 = hashlib.sha256(data).hexdigest()
+    existing = db.scalar(
+        select(Document.id).where(Document.owner_id == owner_id, Document.sha256 == sha256)
+    )
+    if existing is not None:
+        raise DuplicateDocumentError(existing)
+    doc = Document(owner_id=owner_id, filename=filename, sha256=sha256, pdf_data=data)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
+
+
+def process_document(
+    db: Session, document_id: uuid.UUID, embedder: Embedder, cfg: RagConfig
+) -> Document | None:
+    """The slow part, run by a worker: pages -> chunks -> embeddings. Ends with the
+    document "ready", or "failed" with a reason the user can read."""
+    doc = db.get(Document, document_id)
+    if doc is None or doc.status != "processing" or doc.pdf_data is None:
+        return doc  # unknown, or already processed (a job delivered twice)
+    try:
+        pages = extract_pages(doc.pdf_data, max_pages=cfg.max_pages)
+        pieces = chunk_pages(pages, cfg.chunk_chars, cfg.chunk_overlap_chars)
+        vectors = embedder.embed_documents([p.text for p in pieces])
+    except InvalidPDFError as exc:
+        doc.status, doc.error, doc.pdf_data = "failed", str(exc), None
+        db.commit()
+        log.info("document rejected", extra={"document_id": str(doc.id), "error": str(exc)})
+        return doc
+    doc.chunks = [
+        Chunk(ord=p.ord, page=p.page, text=p.text, embedding=v)
+        for p, v in zip(pieces, vectors, strict=True)
+    ]
+    doc.pages, doc.status, doc.pdf_data = len(pages), "ready", None
+    db.commit()
+    db.refresh(doc)
+    log.info(
+        "document ingested",
+        extra={"document_id": str(doc.id), "pages": doc.pages, "chunks": len(pieces)},
+    )
+    return doc
+
+
 def ingest_pdf(
     db: Session,
     owner_id: uuid.UUID,
@@ -44,30 +98,9 @@ def ingest_pdf(
     embedder: Embedder,
     cfg: RagConfig,
 ) -> Document:
-    sha256 = hashlib.sha256(data).hexdigest()
-    existing = db.scalar(
-        select(Document.id).where(Document.owner_id == owner_id, Document.sha256 == sha256)
-    )
-    if existing is not None:
-        raise DuplicateDocumentError(existing)
-
-    pages = extract_pages(data, max_pages=cfg.max_pages)
-    pieces = chunk_pages(pages, cfg.chunk_chars, cfg.chunk_overlap_chars)
-    vectors = embedder.embed_documents([p.text for p in pieces])
-
-    doc = Document(owner_id=owner_id, filename=filename, sha256=sha256, pages=len(pages))
-    doc.chunks = [
-        Chunk(ord=p.ord, page=p.page, text=p.text, embedding=v)
-        for p, v in zip(pieces, vectors, strict=True)
-    ]
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-    log.info(
-        "document ingested",
-        extra={"document_id": str(doc.id), "pages": doc.pages, "chunks": len(pieces)},
-    )
-    return doc
+    """Upload and process in one go (tests and scripts; the API splits the two)."""
+    doc = create_upload(db, owner_id, filename, data)
+    return process_document(db, doc.id, embedder, cfg)  # type: ignore[return-value]
 
 
 def _scoped(stmt: Select, owner_id: uuid.UUID, document_ids: list[uuid.UUID] | None) -> Select:

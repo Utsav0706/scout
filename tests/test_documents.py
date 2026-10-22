@@ -1,7 +1,11 @@
+import uuid
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from scout.models import Chunk
+from scout.jobs.queue import QueueUnavailableError
+from scout.models import Chunk, Document
 from tests.conftest import auth_headers, requires_postgres
 from tests.fakes import make_pdf
 
@@ -23,12 +27,49 @@ def _upload(client: TestClient, headers: dict, data: bytes, name: str = "policy.
 # --- upload + list (run everywhere) ---
 
 
-def test_upload_stores_document_and_chunks(client: TestClient) -> None:
+def test_upload_is_accepted_then_processed_by_the_worker(client: TestClient) -> None:
     resp = _upload(client, auth_headers(client), POLICY_PDF)
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["pages"] == 2
+    assert resp.status_code == 202, resp.text
+    # The test queue runs the worker job synchronously, so it's already processed.
+    body = resp.json()
+    assert (body["status"], body["pages"], body["error"]) == ("ready", 2, None)
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Chunk)) == 2
+        doc = db.get(Document, uuid.UUID(body["id"]))
+        assert doc.pdf_data is None  # the PDF is dropped once its text is stored
+
+
+def test_pdf_that_fails_processing_is_marked_failed_with_a_reason(client: TestClient) -> None:
+    # Starts with %PDF- (passes the instant check) but isn't a readable PDF.
+    resp = _upload(client, auth_headers(client), b"%PDF-1.4 broken file")
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "failed" and "Could not read PDF" in body["error"]
+    listed = client.get("/documents", headers=auth_headers(client)).json()
+    assert listed[0]["status"] == "failed"
+
+
+def test_upload_with_queue_down_is_503(client: TestClient) -> None:
+    class DownQueue:
+        def enqueue_ingest(self, document_id):
+            raise QueueUnavailableError("redis down")
+
+    client.app.state.job_queue = DownQueue()
+    resp = _upload(client, auth_headers(client), POLICY_PDF)
+    assert resp.status_code == 503
+    with client.app.state.session_factory() as db:
+        doc = db.scalars(select(Document)).one()
+        assert (doc.status, doc.pdf_data) == ("failed", None)
+
+
+@pytest.mark.anyio
+async def test_processing_a_document_twice_is_harmless(client: TestClient) -> None:
+    from scout.jobs.runner import run_ingest
+
+    body = _upload(client, auth_headers(client), POLICY_PDF).json()
+    await run_ingest(client.app.state.services, uuid.UUID(body["id"]))  # delivered again
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(Chunk)) == 2  # no duplicate chunks
 
 
 def test_upload_requires_login(client: TestClient) -> None:

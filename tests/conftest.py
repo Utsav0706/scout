@@ -2,6 +2,7 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
+import fakeredis
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from scout.api.main import create_app
 from scout.config import Secrets, load_config
 from scout.db import Base, init_db, make_engine
+from scout.jobs import worker
+from scout.jobs.queue import RQQueue
 from tests.fakes import FakeEmbedder, FakeReranker
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +36,13 @@ def secrets() -> Secrets:
     )
 
 
+def sync_rq_queue(services, loop) -> RQQueue:
+    """A real RQ queue on fake Redis that runs each job immediately, in the caller,
+    against the test's services: the worker code path, with no Redis or worker process."""
+    worker.configure(services)
+    return RQQueue(fakeredis.FakeStrictRedis(), job_timeout_s=300, is_async=False)
+
+
 @pytest.fixture
 def client(secrets: Secrets) -> Iterator[TestClient]:
     app = create_app(
@@ -40,9 +50,11 @@ def client(secrets: Secrets) -> Iterator[TestClient]:
         config=load_config(REPO_ROOT / "config.yaml"),
         embedder=FakeEmbedder(),
         reranker=FakeReranker(),
+        queue_factory=sync_rq_queue,
     )
     with TestClient(app) as c:  # "with" runs startup, which creates the tables
         yield c
+    worker.configure(None)
     # Fresh tables for every test, so tests can't leak data into each other.
     Base.metadata.drop_all(app.state.engine)
 

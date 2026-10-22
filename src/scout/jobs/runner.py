@@ -16,7 +16,8 @@ from datetime import UTC, datetime
 import anyio
 
 from scout.agent.runtime import Services, research
-from scout.models import JobEvent, ResearchJob
+from scout.models import Document, JobEvent, ResearchJob
+from scout.rag.store import process_document
 
 log = logging.getLogger(__name__)
 
@@ -104,3 +105,24 @@ async def run_job(services: Services, job_id: uuid.UUID) -> None:
 
     await anyio.to_thread.run_sync(finish)
     log.info("research job finished", extra={"job_id": str(job_id)})
+
+
+async def run_ingest(services: Services, document_id: uuid.UUID) -> None:
+    """Process an uploaded PDF (extract, chunk, embed). CPU-bound, so it runs in a thread.
+    Like run_job it never raises: failures end up on the document row."""
+
+    def work() -> None:
+        with services.session_factory() as db:
+            try:
+                process_document(db, document_id, services.embedder, services.config.rag)
+            except Exception as exc:
+                log.exception("document ingest failed", extra={"document_id": str(document_id)})
+                db.rollback()
+                doc = db.get(Document, document_id)
+                if doc is not None:
+                    doc.status = "failed"
+                    doc.error = f"Processing failed ({type(_root_cause(exc)).__name__})."
+                    doc.pdf_data = None
+                    db.commit()
+
+    await anyio.to_thread.run_sync(work)

@@ -41,7 +41,9 @@ class DocumentOut(BaseModel):
 
     id: uuid.UUID
     filename: str
-    pages: int
+    status: Literal["processing", "ready", "failed"]
+    error: str | None = None
+    pages: int  # 0 until processed
     created_at: datetime
 
 

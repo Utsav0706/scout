@@ -8,18 +8,19 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 
 from scout.api.deps import CurrentUser, DbSession
+from scout.jobs.queue import QueueUnavailableError
 from scout.models import Document
 from scout.rag import store
-from scout.rag.pdf import InvalidPDFError
 from scout.schemas import DocumentOut, SearchHitOut, SearchIn
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
-@router.post("", response_model=DocumentOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=DocumentOut, status_code=status.HTTP_202_ACCEPTED)
 def upload(file: UploadFile, request: Request, user: CurrentUser, db: DbSession) -> Document:
-    """Ingest runs inside the request for now (fine for small PDFs).
-    M6 moves it to the background worker so big files don't block the API."""
+    """Accept a PDF and queue it for processing. Returns at once with status
+    "processing"; GET /documents shows when it is "ready" (or "failed", with the reason).
+    A 300-page PDF can take minutes to embed on CPU: far too long for one request."""
     cfg = request.app.state.config.rag
     limit = cfg.max_upload_mb * 1024 * 1024
     # Read one byte past the limit: enough to know it's too big without loading a huge file.
@@ -31,13 +32,24 @@ def upload(file: UploadFile, request: Request, user: CurrentUser, db: DbSession)
     # Keep only the base name: a filename like "../../etc/passwd" must not carry a path.
     filename = PurePath(file.filename or "upload.pdf").name[:255] or "upload.pdf"
     try:
-        return store.ingest_pdf(db, user.id, filename, data, request.app.state.embedder, cfg)
-    except InvalidPDFError as exc:
+        doc = store.create_upload(db, user.id, filename, data)
+    except store.NotAPDFError as exc:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, str(exc)) from None
     except store.DuplicateDocumentError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT, {"message": "Already uploaded", "id": str(exc.existing_id)}
         ) from None
+
+    try:
+        request.app.state.job_queue.enqueue_ingest(doc.id)
+    except QueueUnavailableError:
+        doc.status, doc.error, doc.pdf_data = "failed", "The job queue is unavailable.", None
+        db.commit()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "The job queue is unavailable; try again soon."
+        ) from None
+    db.refresh(doc)  # a synchronous queue (tests) may already have processed it
+    return doc
 
 
 @router.get("", response_model=list[DocumentOut])

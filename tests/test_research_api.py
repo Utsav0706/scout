@@ -7,7 +7,6 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import fakeredis
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -17,10 +16,16 @@ from scout.api.main import create_app
 from scout.config import Secrets, load_config
 from scout.db import Base
 from scout.jobs import worker
-from scout.jobs.queue import QueueUnavailableError, RQQueue
+from scout.jobs.queue import QueueUnavailableError
 from scout.jobs.runner import run_job
 from scout.models import ResearchJob, User
-from tests.conftest import REPO_ROOT, TEST_DATABASE_URL, TEST_JWT_SECRET, auth_headers
+from tests.conftest import (
+    REPO_ROOT,
+    TEST_DATABASE_URL,
+    TEST_JWT_SECRET,
+    auth_headers,
+    sync_rq_queue,
+)
 from tests.fakes import FakeEmbedder, FakeReranker
 from tests.test_agent import FakeLLM, default_script, web
 
@@ -46,10 +51,6 @@ def make_client(
         jobs_mode=mode,
     )
 
-    def rq_sync(services, loop):
-        worker.configure(services)  # the "worker" runs jobs against the test's services
-        return RQQueue(fakeredis.FakeStrictRedis(), job_timeout_s=300, is_async=False)
-
     app = create_app(
         secrets=secrets,
         config=config,
@@ -57,7 +58,7 @@ def make_client(
         reranker=FakeReranker(),
         llm=FakeLLM(script),
         http_transport=httpx.MockTransport(web),
-        queue_factory=queue_factory or (rq_sync if mode == "rq" else None),
+        queue_factory=queue_factory or (sync_rq_queue if mode == "rq" else None),
     )
     return TestClient(app)
 
@@ -264,3 +265,70 @@ async def test_run_job_only_starts_queued_jobs(client: TestClient) -> None:
     await run_job(services, uuid.uuid4())  # unknown id: also a no-op
     with services.session_factory() as db:
         assert db.get(ResearchJob, job_id).status == "complete"
+
+
+# --- live progress stream (SSE) ---
+
+
+def read_sse(client: TestClient, url: str, headers: dict) -> list[tuple[str | None, str, dict]]:
+    """(id, event, data) for each event in a server-sent event stream."""
+    import json
+
+    events, current = [], {}
+    with client.stream("GET", url, headers=headers) as resp:
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        assert resp.headers["cache-control"] == "no-cache"
+        for line in resp.iter_lines():
+            if not line:
+                if current:
+                    events.append(
+                        (current.get("id"), current["event"], json.loads(current["data"]))
+                    )
+                current = {}
+            elif not line.startswith(":"):
+                key, _, value = line.partition(": ")
+                current[key] = value
+    return events
+
+
+def test_stream_replays_progress_then_done(client: TestClient) -> None:
+    headers = auth_headers(client)
+    job_id = client.post("/research", json=QUESTION, headers=headers).json()["job_id"]
+    events = read_sse(client, f"/research/{job_id}/stream", headers)
+
+    kinds = [e[1] for e in events]
+    assert kinds[-1] == "done" and set(kinds[:-1]) == {"progress"}
+    assert events[-1][2] == {"status": "complete"}
+    messages = [e[2]["message"] for e in events[:-1]]
+    assert messages[0] == "Research started" and messages[-1].startswith("Finished")
+    ids = [int(e[0]) for e in events[:-1]]
+    assert ids == sorted(ids) and len(set(ids)) == len(ids)  # ordered, unique ids
+
+
+def test_stream_resumes_after_last_event_id(client: TestClient) -> None:
+    headers = auth_headers(client)
+    job_id = client.post("/research", json=QUESTION, headers=headers).json()["job_id"]
+    first = read_sse(client, f"/research/{job_id}/stream", headers)
+    third_id = first[2][0]
+    resumed = read_sse(client, f"/research/{job_id}/stream", {**headers, "Last-Event-ID": third_id})
+    assert [e[0] for e in resumed[:-1]] == [e[0] for e in first[3:-1]]  # no gaps, no repeats
+
+
+def test_stream_follows_a_running_job(tmp_path: Path, monkeypatch) -> None:
+    from scout.api import routes_research
+
+    monkeypatch.setattr(routes_research, "POLL_S", 0.05)
+    with make_client(tmp_path, mode="inline") as client:  # job runs while we stream
+        headers = auth_headers(client)
+        job_id = client.post("/research", json=QUESTION, headers=headers).json()["job_id"]
+        events = read_sse(client, f"/research/{job_id}/stream", headers)
+        assert events[-1][1:] == ("done", {"status": "complete"})
+        assert sum(e[1] == "progress" for e in events) >= 8
+
+
+def test_stream_is_private(client: TestClient) -> None:
+    job_id = client.post("/research", json=QUESTION, headers=auth_headers(client)).json()["job_id"]
+    other = auth_headers(client, "other@example.com")
+    assert client.get(f"/research/{job_id}/stream", headers=other).status_code == 404
+    assert client.get(f"/research/{job_id}/stream").status_code == 401

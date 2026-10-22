@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 import math
+import time
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
+import anyio
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
 from scout.api.deps import CurrentUser, DbSession
 from scout.jobs.queue import QueueUnavailableError
@@ -83,22 +90,30 @@ def start_research(
     return JobCreatedOut(job_id=job.id, status=job.status, status_url=url)
 
 
-@router.get("/{job_id}", response_model=JobOut)
-def get_research(job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbSession) -> JobOut:
+def _own_job(db: Session, job_id: uuid.UUID, user_id: uuid.UUID) -> ResearchJob:
     job = db.get(ResearchJob, job_id)
     # Someone else's job is "not found", not "forbidden": don't confirm it exists.
-    if job is None or job.user_id != user.id:
+    if job is None or job.user_id != user_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Research job not found")
+    return job
 
-    stale_after = timedelta(seconds=request.app.state.config.jobs.stale_after_s)
+
+def _fail_if_stale(db: Session, job: ResearchJob, stale_after_s: int) -> None:
+    """A job "running" far longer than any run can take has lost its worker (crash,
+    restart): mark it failed instead of leaving it "running" forever."""
     started = _aware(job.started_at)
-    if job.status == "running" and started and datetime.now(UTC) - started > stale_after:
-        # Its worker died (crash, restart) mid-run: say so instead of "running" forever.
+    too_old = started and datetime.now(UTC) - started > timedelta(seconds=stale_after_s)
+    if job.status == "running" and too_old:
         job.status, job.error = "failed", "The worker running this job stopped responding."
         job.finished_at = datetime.now(UTC)
         db.add(JobEvent(job_id=job.id, node="job", message=job.error))
         db.commit()
 
+
+@router.get("/{job_id}", response_model=JobOut)
+def get_research(job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbSession) -> JobOut:
+    job = _own_job(db, job_id, user.id)
+    _fail_if_stale(db, job, request.app.state.config.jobs.stale_after_s)
     events = db.scalars(
         select(JobEvent).where(JobEvent.job_id == job.id).order_by(JobEvent.id)
     ).all()
@@ -113,4 +128,81 @@ def get_research(job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbS
         error=job.error,
         events=[JobEventOut.model_validate(e) for e in events],
         report=job.report if job.status in TERMINAL else None,
+    )
+
+
+# --- live progress (server-sent events) ---
+
+POLL_S = 1.0  # how often the stream checks for new events
+HEARTBEAT_S = 15.0  # comment line on quiet streams, so proxies don't close them
+
+
+def _sse(event: str, data: dict, event_id: int | None = None) -> str:
+    head = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{head}event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+@router.get("/{job_id}/stream")
+async def stream_research(
+    job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbSession
+) -> StreamingResponse:
+    """Progress as server-sent events: `progress` per step, then one `done` with the final
+    status (fetch the report from GET /research/{id}).
+
+    Polls the job_events table rather than using Redis pub/sub: the API and the worker
+    already share the database, and a 1 s delay is fine for jobs that take 30-120 s.
+    Each event carries an id, so a reconnecting client (EventSource does this itself)
+    sends Last-Event-ID and resumes without gaps or repeats.
+    """
+    _own_job(db, job_id, user.id)
+    cfg = request.app.state.config
+    factory = request.app.state.session_factory
+    try:
+        last_id = int(request.headers.get("last-event-id", "0"))
+    except ValueError:
+        last_id = 0
+
+    def poll(after: int) -> tuple[list[tuple[int, str, str, datetime]], str]:
+        with factory() as s:
+            job = s.get(ResearchJob, job_id)
+            _fail_if_stale(s, job, cfg.jobs.stale_after_s)
+            rows = s.execute(
+                select(JobEvent.id, JobEvent.node, JobEvent.message, JobEvent.created_at)
+                .where(JobEvent.job_id == job_id, JobEvent.id > after)
+                .order_by(JobEvent.id)
+            ).all()
+            return [tuple(r) for r in rows], job.status
+
+    async def events() -> AsyncIterator[str]:
+        nonlocal last_id
+        # Never stream forever: a job can't outlive its timeout plus the stale window.
+        deadline = time.monotonic() + cfg.limits.timeout_s + cfg.jobs.stale_after_s
+        last_sent = time.monotonic()
+        while True:
+            if await request.is_disconnected():
+                return
+            rows, job_status = await anyio.to_thread.run_sync(poll, last_id)
+            for event_id, node, message, created in rows:
+                yield _sse(
+                    "progress",
+                    {"node": node, "message": message, "at": _aware(created).isoformat()},
+                    event_id,
+                )
+                last_id, last_sent = event_id, time.monotonic()
+            if job_status in TERMINAL:
+                yield _sse("done", {"status": job_status})
+                return
+            if time.monotonic() > deadline:
+                yield _sse("timeout", {"status": job_status})
+                return
+            if time.monotonic() - last_sent >= HEARTBEAT_S:
+                yield ": keep-alive\n\n"
+                last_sent = time.monotonic()
+            await asyncio.sleep(POLL_S)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        # no-cache: never serve a stored copy; X-Accel-Buffering: stop nginx buffering it.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

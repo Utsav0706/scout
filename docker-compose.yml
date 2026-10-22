@@ -20,12 +20,31 @@ services:
       retries: 10
     mem_limit: 512m
 
+  redis:
+    # The job queue. noeviction: Redis must refuse writes rather than silently drop queued
+    # jobs when full; appendonly: queued jobs survive a Redis restart.
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "48mb",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    mem_limit: 64m
+
   api:
     build: .
-    env_file: .env
-    environment:
-      # Inside the compose network the DB host is "db", not localhost.
+    env_file:
+      - path: .env
+        required: false  # CI has no .env; it passes what it needs another way
+    environment: &app-env
+      # Inside the compose network hosts are service names, not localhost.
       DATABASE_URL: postgresql+psycopg://scout:scout@db:5432/scout
+      REDIS_URL: redis://redis:6379/0
+      JOBS_MODE: rq
     ports:
       - "8000:8000"
     volumes:
@@ -34,9 +53,39 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    # Embedding + reranker models need ~400 MB on top of the API itself.
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    # Research and PDF ingest run in the worker; the API only loads the models if
+    # POST /documents/search is used.
+    mem_limit: 768m
+
+  worker:
+    build: .
+    # SimpleWorker: one long-lived process, so the models load once (see jobs/worker.py).
+    command: ["rq", "worker", "scout", "--url", "redis://redis:6379/0",
+              "--worker-class", "rq.worker.SimpleWorker"]
+    env_file:
+      - path: .env
+        required: false
+    environment: *app-env
+    volumes:
+      - hf_cache:/home/scout/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped  # a crashed worker comes back; its abandoned job is marked failed
+    # Embedding + reranker (~400 MB) plus a research run.
     mem_limit: 1g
 
 volumes:
   pgdata:
+  redisdata:
   hf_cache:

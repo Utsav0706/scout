@@ -21,7 +21,7 @@ from sqlalchemy.orm import sessionmaker
 from scout.agent.runtime import Services
 from scout.config import get_config, get_secrets
 from scout.db import init_db, make_engine
-from scout.jobs.runner import run_job
+from scout.jobs.runner import run_ingest, run_job
 from scout.log import setup_logging
 
 _override: Services | None = None
@@ -45,3 +45,8 @@ def _services_from_env() -> Services:
 def run_job_sync(job_id: str) -> None:
     """Called by RQ (synchronously) for each job."""
     asyncio.run(run_job(_override or _services_from_env(), uuid.UUID(job_id)))
+
+
+def ingest_document_sync(document_id: str) -> None:
+    """Called by RQ for each uploaded PDF."""
+    asyncio.run(run_ingest(_override or _services_from_env(), uuid.UUID(document_id)))
