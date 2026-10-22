@@ -29,6 +29,8 @@ dependencies = [
     "beautifulsoup4>=4.12",
     # 1.x pinned on purpose: 2.0 is new and its changes haven't been reviewed yet.
     "anthropic>=1.17,<2",
+    "langgraph>=1.2,<2",
+    "anyio>=4.6",
 ]
 
 [project.optional-dependencies]
