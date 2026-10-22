@@ -7,8 +7,8 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M4 — first working agent.** Ask a question from the command line and get a
-cited report. Claims are not verified yet (M5).
+Status: **M5a — verified claims.** Ask a question from the command line and get a cited
+report in which every claim has been checked against the source text it cites.
 
 ## Ask a question
 
@@ -25,7 +25,7 @@ py -m scout.agent.run "your question" --user you@example.com --create-user --dat
 ### How the agent works
 
 ```
-START -> planner -> researcher x N (in parallel) -> reader -> writer -> finaliser -> END
+START -> planner -> researcher x N (in parallel) -> reader -> writer -> verifier -> finaliser -> END
 ```
 
 | Step | Model | Job |
@@ -34,11 +34,31 @@ START -> planner -> researcher x N (in parallel) -> reader -> writer -> finalise
 | researcher | Haiku 5.5 | Per sub-question, up to 3 rounds of tool calls (search, read pages, search docs) |
 | reader | Haiku 5.5 | Extract facts from each source read; saved as notes tied to the source id |
 | writer | Sonnet 5.5 | Write the report from the notes only; every claim cites source ids |
+| verifier | Haiku 5.5 | Check each claim against the source text it cites: supported / unsupported / contradicted, with verbatim quotes |
 | finaliser | (code) | Drop invented source ids, list cited sources, add cost/steps; markdown + JSON |
 
 Limits on every run: 25 model calls, £0.20, 180 s. Research stops early enough to keep
 money for the writer; if a limit is still hit, you get a partial report saying why.
-First live runs: **£0.023 / 35 s** and **£0.028 / 40 s** per report.
+First live runs: **£0.023 / 35 s** and **£0.028 / 40 s** per report (M4); with
+verification **£0.030–0.033 / 40 s**.
+
+### How claims are verified
+
+Claims are grouped by the source they cite, so each source is read once (3-6 cheap
+calls per report). For every claim the model returns a verdict and 1-3 **verbatim
+quotes**; then plain code (not the model) checks every quote really occurs in the source,
+word for word and in order. A "supported" or "contradicted" verdict with a quote that
+isn't there is downgraded to "unsupported", so the checker can't invent its own
+evidence. The report's `verification` block gives the support rate, and the markdown
+flags any claim that isn't supported.
+
+Found while building it (live runs, checked by hand):
+- The model sometimes stitched two sentences into one quote to back a claim that
+  combines two facts; it now gives up to 3 separate quotes.
+- Honest quotes failed because HTML extraction puts a space before commas
+  (`models , may`); quotes are now compared word by word, ignoring punctuation.
+- A loose "contradicted" rule flagged a correct claim; the rubric now requires a
+  conflicting statement about the *same* measure and period (prompt `verifier_v2`→`v3`).
 
 ## Run it
 

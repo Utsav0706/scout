@@ -13,7 +13,16 @@ from scout.agent.budget import BudgetExceeded, RunBudget
 from scout.agent.graph import run_research
 from scout.agent.nodes import _pick_sources
 from scout.agent.report import to_markdown
-from scout.agent.state import DraftClaim, DraftOut, DraftSection, Evidence, PlanOut, ReaderOut
+from scout.agent.state import (
+    ClaimVerdict,
+    DraftClaim,
+    DraftOut,
+    DraftSection,
+    Evidence,
+    PlanOut,
+    ReaderOut,
+    VerifyOut,
+)
 from scout.llm.client import LLMError, LLMResult, ToolCall, Usage
 from scout.models import Note
 from scout.models import ToolCall as ToolCallRow
@@ -74,7 +83,21 @@ def default_script(node: str, kw: dict[str, Any]) -> LLMResult | Exception:
                 limitations=[],
             ),
         )
+    if node == "verifier":
+        return result(node, parsed=verify_all(msgs[0]["content"], "supported"))
     raise AssertionError(node)
+
+
+def verify_all(content: str, verdict: str) -> VerifyOut:
+    """Fake verifier: give every numbered claim `verdict`, quoting real source text."""
+    source = re.search(r"<source[^>]*>\n(.*?)\n</source>", content, re.S).group(1)
+    ids = [int(i) for i in re.findall(r"^\[(\d+)\]", content.split("<claims>")[1], re.M)]
+    quote = source.splitlines()[-1]  # a real, whole-word passage from the source
+    return VerifyOut(
+        verdicts=[
+            ClaimVerdict(claim_id=i, verdict=verdict, quotes=[quote], reason="fake") for i in ids
+        ]
+    )
 
 
 class FakeLLM:
@@ -131,16 +154,19 @@ async def test_full_run_produces_cited_report(db_factory) -> None:
     assert llm.nodes().count("planner") == 1
     assert llm.nodes().count("researcher") == 2 * 3  # 2 sub-questions x 3 turns
     assert llm.nodes().count("reader") == 2  # one fetched page per sub-question
-    assert llm.nodes()[-1] == "writer"
+    assert llm.nodes().count("writer") == 1
+    assert llm.nodes()[-2:] == ["verifier", "verifier"]  # one check per cited source
 
     claims = [c for s in report.sections for c in s.claims]
     assert len(claims) == 2
     cited = {sid for c in claims for sid in c.source_ids}
     assert cited == {s.id for s in report.sources}  # every cited id is listed, nothing extra
     assert all(s.url_or_doc.startswith("https://example.com/") for s in report.sources)
-    assert all(c.verdict == "unverified" for c in claims)  # verifier arrives in M5
+    assert all(c.verdict == "supported" and c.quote for c in claims)
+    v = report.verification
+    assert (v.checked, v.supported, v.support_rate) == (2, 2, 1.0)
     assert report.cost_gbp == pytest.approx(0.001 * len(llm.calls))
-    assert set(report.prompt_versions) == {"planner", "researcher", "reader", "writer"}
+    assert set(report.prompt_versions) == {"planner", "researcher", "reader", "writer", "verifier"}
 
 
 @pytest.mark.anyio
@@ -264,7 +290,7 @@ async def test_cost_limit_keeps_money_for_the_writer(db_factory) -> None:
     assert "cost limit" in report.stop_reason
     # Research stopped once spend + reserve reached the cap (with parallel researchers
     # each allowed to finish one in-flight call), and nothing ran past the cap.
-    research = sum(0.03 for n in llm.nodes() if n != "writer")
+    research = sum(0.03 for n in llm.nodes() if n not in ("writer", "verifier"))
     assert research <= 0.20 - 0.06 + 2 * 0.03
     assert report.cost_gbp <= 0.20 + 0.03
 

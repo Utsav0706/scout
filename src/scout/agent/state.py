@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import operator
 from dataclasses import dataclass, field
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from mcp import Client
 from pydantic import BaseModel, Field
@@ -46,7 +46,11 @@ class ResearchState(TypedDict, total=False):
     # operator.add: parallel researchers each return a list, LangGraph concatenates them.
     evidence: Annotated[list[Evidence], operator.add]
     notes: list[NoteItem]
-    draft: Any  # writer.DraftOut | None
+    # Written by the writer (source ids already cleaned), then given verdicts by the verifier.
+    summary: str
+    sections: list[Any]  # list[report.Section]
+    writer_limitations: list[str]
+    verification: Any  # report.Verification | None
     problems: Annotated[list[str], operator.add]  # non-fatal issues for "limitations"
     report: Any  # report.Report, set by the finaliser
 
@@ -97,3 +101,17 @@ class DraftOut(BaseModel):
     summary: str
     sections: list[DraftSection]
     limitations: list[str]
+
+
+class ClaimVerdict(BaseModel):
+    claim_id: int
+    verdict: Literal["supported", "unsupported", "contradicted"]
+    quotes: list[str] = Field(
+        description="1-3 word-for-word passages from the source, one per place the "
+        "claim's facts come from"
+    )
+    reason: str
+
+
+class VerifyOut(BaseModel):
+    verdicts: list[ClaimVerdict]

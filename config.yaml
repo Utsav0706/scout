@@ -38,7 +38,7 @@ llm:
     verifier:
       model: claude-haiku-5-5
       task_type: verify
-      effort: low
+      effort: medium   # accuracy matters most here; on Haiku it costs fractions of a penny
       max_tokens: 3000
     reviser:
       model: claude-sonnet-5-5

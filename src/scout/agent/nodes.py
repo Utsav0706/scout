@@ -1,8 +1,8 @@
 """The graph's nodes: planner -> researcher (one per sub-question, in parallel) ->
-reader -> writer -> finaliser.
+reader -> writer -> verifier -> finaliser.
 
-Every model call goes through _llm(), which checks the shared budget first, charges
-what the call cost (even when it fails), and records a step. When a limit is hit, nodes
+Model and tool calls go through calls.llm_call / calls.tool_call (budget + step
+accounting). The verifier lives in its own module (verifier.py). When a limit is hit, nodes
 stop doing new work but the graph still runs to the finaliser, so a partial report is
 always returned instead of an exception.
 """
@@ -10,17 +10,15 @@ always returned instead of an exception.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import time
 from typing import Any
 
 from langgraph.runtime import Runtime
 from langgraph.types import Send
-from pydantic import BaseModel
 
 from scout.agent.budget import BudgetExceeded
-from scout.agent.report import Claim, Report, ReportSource, Section, StepRecord
+from scout.agent.calls import llm_call, tool_call
+from scout.agent.report import Claim, Report, ReportSource, Section
 from scout.agent.state import (
     AgentDeps,
     DraftOut,
@@ -31,80 +29,12 @@ from scout.agent.state import (
     ResearcherInput,
     ResearchState,
 )
-from scout.config import NodeName
-from scout.llm.client import LLMError, LLMResult, ToolCall
+from scout.llm.client import LLMError, ToolCall
 
 log = logging.getLogger(__name__)
 
 _MAX_TOOL_RESULT_CHARS = 12_000  # what the researcher model sees of one tool result
 _READ_CONCURRENCY = 4
-
-
-async def _llm(
-    deps: AgentDeps,
-    node: NodeName,
-    *,
-    reserve_gbp: float = 0.0,
-    output_format: type[BaseModel] | None = None,
-    **kwargs: Any,
-) -> LLMResult:
-    deps.budget.check(reserve_gbp)
-    try:
-        result = await deps.llm.complete(node, output_format=output_format, **kwargs)
-    except LLMError as exc:
-        deps.budget.charge(exc.cost_gbp)
-        deps.steps.append(
-            StepRecord(
-                node=node,
-                kind="llm",
-                name=node,
-                ok=False,
-                ms=0,
-                cost_gbp=exc.cost_gbp,
-                detail=str(exc),
-            )
-        )
-        raise
-    deps.budget.charge(result.cost_gbp)
-    deps.steps.append(
-        StepRecord(
-            node=node,
-            kind="llm",
-            name=result.model,
-            ok=True,
-            ms=result.latency_ms,
-            cost_gbp=result.cost_gbp,
-        )
-    )
-    return result
-
-
-async def _tool(
-    deps: AgentDeps, node: str, name: str, args: dict[str, Any]
-) -> tuple[bool, Any, str]:
-    """Call an MCP tool. Returns (ok, structured result, text for the model)."""
-    start = time.perf_counter()
-    try:
-        result = await deps.mcp.call_tool(name, args)
-        ok = not result.is_error
-        structured = result.structured_content
-        if ok and structured is not None:
-            text = json.dumps(structured, ensure_ascii=False)
-        else:
-            text = "".join(getattr(c, "text", "") for c in result.content)
-    except Exception as exc:  # transport-level failure: report it to the model, keep going
-        ok, structured, text = False, None, f"Tool {name} failed: {type(exc).__name__}"
-    deps.steps.append(
-        StepRecord(
-            node=node,
-            kind="tool",
-            name=name,
-            ok=ok,
-            ms=int((time.perf_counter() - start) * 1000),
-            detail=None if ok else text[:300],
-        )
-    )
-    return ok, structured, text
 
 
 # --- planner ---
@@ -125,7 +55,7 @@ async def planner(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str
         max_sub_questions=cfg.max_sub_questions, available_sources=" and ".join(available)
     )
     try:
-        res = await _llm(
+        res = await llm_call(
             deps,
             "planner",
             system=system,
@@ -195,7 +125,7 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
 
     for _ in range(cfg.max_tool_turns):
         try:
-            res = await _llm(
+            res = await llm_call(
                 deps,
                 "researcher",
                 reserve_gbp=cfg.writer_reserve_gbp,
@@ -214,7 +144,7 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
         # Run this turn's tool calls in parallel, then return all results in ONE user
         # message (splitting them teaches the model to stop calling tools in parallel).
         outcomes = await asyncio.gather(
-            *(_tool(deps, "researcher", c.name, c.input) for c in res.tool_calls)
+            *(tool_call(deps, "researcher", c.name, c.input) for c in res.tool_calls)
         )
         results = []
         for call, (ok, structured, text) in zip(res.tool_calls, outcomes, strict=True):
@@ -278,7 +208,7 @@ async def reader(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
                 f"{ev.text[: cfg.max_source_chars]}\n</source>"
             )
             try:
-                res = await _llm(
+                res = await llm_call(
                     deps,
                     "reader",
                     reserve_gbp=cfg.writer_reserve_gbp,
@@ -294,7 +224,7 @@ async def reader(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
                 if len(fact) < 3:
                     continue
                 # Saving through the tool checks the source id and writes the audit row.
-                ok, _, _ = await _tool(
+                ok, _, _ = await tool_call(
                     deps, "reader", "save_note", {"text": fact, "source_id": ev.source_id}
                 )
                 if ok:
@@ -322,11 +252,12 @@ def _notes_block(state: ResearchState, deps: AgentDeps) -> str:
 
 async def writer(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str, Any]:
     deps = runtime.context
-    if not state.get("notes"):
-        return {"draft": None}  # nothing to write from: no model call, no cost
+    notes = state.get("notes", [])
+    if not notes:
+        return {}  # nothing to write from: no model call, no cost
     system = deps.prompts["writer"].render(question=state["question"])
     try:
-        res = await _llm(
+        res = await llm_call(
             deps,
             "writer",
             system=system,
@@ -334,18 +265,20 @@ async def writer(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
             messages=[{"role": "user", "content": _notes_block(state, deps)}],
         )
     except BudgetExceeded:
-        return {"draft": None}
+        return {}
     except LLMError as exc:
-        return {"draft": None, "problems": [f"Writing the report failed: {exc}"]}
-    return {"draft": res.parsed}
-
-
-# --- finaliser (no model call) ---
+        return {"problems": [f"Writing the report failed: {exc}"]}
+    draft: DraftOut = res.parsed  # type: ignore[assignment]
+    sections, dropped = _clean_draft(draft, {n.source_id for n in notes})
+    limitations = list(draft.limitations)
+    if dropped:
+        limitations.append(f"{dropped} claim(s) removed because they cited no real source.")
+    return {"summary": draft.summary, "sections": sections, "writer_limitations": limitations}
 
 
 def _clean_draft(draft: DraftOut, known: set[str]) -> tuple[list[Section], int]:
     """Keep only source ids that came from notes; drop claims left with none.
-    The M5 verifier checks support properly; this just stops invented ids."""
+    Whether a source really supports a claim is the verifier's job."""
     sections, dropped = [], 0
     for sec in draft.sections:
         claims = []
@@ -360,20 +293,18 @@ def _clean_draft(draft: DraftOut, known: set[str]) -> tuple[list[Section], int]:
     return sections, dropped
 
 
+# --- finaliser (no model call) ---
+
+
 async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str, Any]:
     deps = runtime.context
     budget = deps.budget
     notes = state.get("notes", [])
-    known = {n.source_id for n in notes}
-    limitations = list(state.get("problems", []))
-    draft: DraftOut | None = state.get("draft")
+    limitations = list(state.get("writer_limitations", [])) + list(state.get("problems", []))
+    sections: list[Section] = state.get("sections") or []
 
-    if draft is not None:
-        sections, dropped = _clean_draft(draft, known)
-        summary = draft.summary
-        limitations = list(draft.limitations) + limitations
-        if dropped:
-            limitations.append(f"{dropped} claim(s) removed because they cited no real source.")
+    if sections:
+        summary = state.get("summary", "")
     elif notes:
         # Stopped before (or while) writing: return the facts we have, each cited.
         summary = "The report could not be written in full. These are the facts collected so far."
@@ -385,14 +316,13 @@ async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[s
         ]
     else:
         summary = "Not enough evidence was found to answer this question."
-        sections = []
 
     if budget.stop_reason:
         status = "partial"
     elif not notes:
         status = "no_evidence" if state.get("sub_questions") else "failed"
     else:
-        status = "complete" if draft is not None else "partial"
+        status = "complete" if state.get("sections") else "partial"
 
     cited = {sid for sec in sections for c in sec.claims for sid in c.source_ids}
     sources = [
@@ -409,6 +339,7 @@ async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[s
         sources=sources,
         limitations=limitations,
         stop_reason=budget.stop_reason,
+        verification=state.get("verification"),
         cost_gbp=round(budget.cost_gbp, 6),
         latency_s=round(budget.elapsed_s, 2),
         steps=deps.steps,
