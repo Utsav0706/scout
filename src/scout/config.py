@@ -60,6 +60,14 @@ class ModelPrice(BaseModel):
     cache_write: float = Field(ge=0)
 
 
+class JobsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_running_per_user: int = Field(default=2, ge=1, le=20)
+    max_per_hour_per_user: int = Field(default=10, ge=1, le=1000)
+    stale_after_s: int = Field(default=600, ge=60)
+
+
 class Limits(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -129,6 +137,7 @@ class AppConfig(BaseModel):
     rag: RagConfig
     tools: ToolsConfig
     agent: AgentConfig
+    jobs: JobsConfig
     limits: Limits
     prices_usd_per_mtok: dict[str, ModelPrice]
     usd_to_gbp: float = Field(gt=0)
@@ -156,6 +165,11 @@ class Secrets(BaseSettings):
     langfuse_secret_key: SecretStr | None = None
     langfuse_host: str = "https://cloud.langfuse.com"
     database_url: str = "postgresql+psycopg://scout:scout@localhost:5432/scout"
+    redis_url: str = "redis://localhost:6379/0"
+    # rq: research runs on a separate RQ worker (production, Docker, Linux).
+    # inline: the API runs jobs itself as background tasks; for local dev without Redis
+    # (RQ workers don't run on Windows). Same code path apart from who runs the job.
+    jobs_mode: Literal["rq", "inline"] = "rq"
     # Signs login tokens. Checked at startup (see auth.require_jwt_secret), not here,
     # so config-only tools and tests can run without one.
     jwt_secret: SecretStr | None = None

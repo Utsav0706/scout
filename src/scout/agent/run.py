@@ -15,20 +15,15 @@ import sys
 import uuid
 from pathlib import Path
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
-from scout.agent.graph import run_research
 from scout.agent.report import Report, to_markdown
+from scout.agent.runtime import Services, research
 from scout.config import get_config, get_secrets
 from scout.db import db_is_up, init_db, make_engine
-from scout.llm.client import LLMClient
 from scout.log import setup_logging
 from scout.models import User
-from scout.rag.models_ml import CrossEncoderReranker, SentenceTransformerEmbedder
-from scout.tools.context import ToolContext
-from scout.tools.netguard import system_resolver
 
 
 def _args(argv: list[str] | None) -> argparse.Namespace:
@@ -79,34 +74,24 @@ async def _main(args: argparse.Namespace) -> Report:
         )
         use_docs = False
 
-    async with httpx.AsyncClient(headers={"User-Agent": "ScoutResearchBot/0.1"}) as http:
-        ctx = ToolContext(
+    services = Services.create(config, secrets, factory)
+
+    async def progress(node: str, message: str) -> None:
+        print(f"  [{node}] {message}", file=sys.stderr)
+
+    # Last-resort timeout on top of the graph's own time limit, which ends runs gracefully.
+    return await asyncio.wait_for(
+        research(
+            services,
             user_id=user_id,
             job_id=uuid.uuid4(),
-            session_factory=factory,
-            embedder=SentenceTransformerEmbedder(config.rag.embedding_model),
-            reranker=CrossEncoderReranker(config.rag.reranker_model),
-            rag_cfg=config.rag,
-            cfg=config.tools,
-            http=http,
-            resolver=system_resolver,
-            tavily_api_key=(
-                secrets.tavily_api_key.get_secret_value() if secrets.tavily_api_key else None
-            ),
-        )
-        llm = LLMClient(config, secrets.anthropic_api_key.get_secret_value())
-        # Last-resort timeout on top of the graph's own time limit, which ends runs gracefully.
-        return await asyncio.wait_for(
-            run_research(
-                args.question,
-                config=config,
-                llm=llm,
-                tool_ctx=ctx,
-                use_web=not args.no_web,
-                use_docs=use_docs,
-            ),
-            timeout=config.limits.timeout_s + 60,
-        )
+            question=args.question,
+            use_web=not args.no_web,
+            use_docs=use_docs,
+            on_event=progress,
+        ),
+        timeout=config.limits.timeout_s + 60,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

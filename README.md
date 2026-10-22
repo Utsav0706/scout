@@ -7,9 +7,9 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M5 — verified, revised reports.** Ask a question from the command line and get a
-cited report in which every claim has been checked against the source text it cites;
-claims that fail are rewritten (and re-checked) or removed.
+Status: **M6a — research API.** Research runs as a background job: `POST /research`
+returns a job id at once, `GET /research/{id}` shows live progress and then the report.
+Every claim in the report has been checked against the source text it cites.
 
 ## Ask a question
 
@@ -113,6 +113,18 @@ Then open http://localhost:8000/docs for the interactive API docs.
 | `POST /documents` | Upload a PDF (multipart `file`, max 20 MB) → chunked + embedded |
 | `GET /documents` | Your uploaded documents |
 | `POST /documents/search` | `{query, document_ids?, top_k?}` → best chunks with page numbers |
+| `POST /research` | `{question, use_web?, use_docs?}` → **202** `{job_id, status_url}` |
+| `GET /research/{id}` | Status, progress events, and the report (JSON) when finished |
+
+Research jobs run on an **RQ worker** (Redis) in production. For local development on
+Windows, where RQ workers can't run, set `JOBS_MODE=inline` and the API runs jobs itself
+(same job code). Per user: at most 2 jobs running and 10 per hour (429 + `Retry-After`).
+Someone else's job id answers 404.
+
+```bash
+set JOBS_MODE=inline
+uvicorn scout.api.main:create_app --factory
+```
 
 The first upload or search downloads two small local models (~200 MB total) from
 Hugging Face; after that they are cached.

@@ -96,6 +96,13 @@ agent:
   # retry round is skipped) rather than leave nothing to finish the report with.
   finish_reserve_gbp: 0.08
 
+jobs:
+  max_running_per_user: 2   # queued + running at once
+  max_per_hour_per_user: 10
+  # A job still "running" this long after starting has lost its worker (crash, restart):
+  # it is marked failed instead of spinning forever.
+  stale_after_s: 600
+
 limits:
   # A step is one model call. Worst case without the retry round is ~34 (plan 1,
   # research 12, read 8, write 1, verify 8, revise 1, re-verify 3); the retry round

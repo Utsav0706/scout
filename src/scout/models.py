@@ -117,3 +117,39 @@ class Note(Base):
     source_id: Mapped[str] = mapped_column(String(16))  # "S3": per-job id from the tools
     text: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ResearchJob(Base):
+    """One research question, run in the background by a worker."""
+
+    __tablename__ = "research_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    question: Mapped[str] = mapped_column(Text)
+    use_web: Mapped[bool] = mapped_column(default=True)
+    use_docs: Mapped[bool] = mapped_column(default=True)
+    # queued -> running -> complete | partial | no_evidence | failed
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    report: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cost_gbp: Mapped[float] = mapped_column(default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class JobEvent(Base):
+    """A progress line for a job ("planner: 4 sub-questions"), shown live to the user."""
+
+    __tablename__ = "job_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)  # order of arrival
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_jobs.id", ondelete="CASCADE"), index=True
+    )
+    node: Mapped[str] = mapped_column(String(32))
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

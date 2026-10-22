@@ -15,6 +15,8 @@ flow.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from mcp import Client
@@ -84,6 +86,44 @@ def _research_tools(listed, use_web: bool, use_docs: bool) -> list[dict]:
     ]
 
 
+# Progress callback: (node, message). Awaited, so it can write to the database.
+OnEvent = Callable[[str, str], Awaitable[None]]
+
+
+def describe(node: str, update: dict[str, Any] | None) -> str | None:
+    """One human-readable progress line for a finished node (None = nothing to say)."""
+    u = update or {}
+    if node == "planner":
+        subs = u.get("sub_questions") or []
+        return f"Planned {len(subs)} sub-questions" if subs else "Planning failed"
+    if node == "researcher":
+        evidence = u.get("evidence") or []
+        if not evidence:
+            return "A researcher found no readable sources"
+        return f"Read {len(evidence)} source(s) for: {evidence[0].sub_question}"
+    if node == "reader":
+        notes, read = u.get("notes") or [], u.get("read_source_ids") or []
+        return f"Took {len(notes)} notes from {len(read)} source(s)" if read else None
+    if node == "writer":
+        sections = u.get("sections")
+        if sections is None:
+            return None
+        return f"Drafted {sum(len(s.claims) for s in sections)} claims"
+    if node == "verifier":
+        v = u.get("verification")
+        return f"Checked claims: {v.supported}/{v.checked} supported" if v else None
+    if node == "reviser":
+        if u.get("retry_questions"):
+            return f"Retrying research for {len(u['retry_questions'])} sub-question(s)"
+        v = u.get("verification")
+        if v is None:
+            return "All claims passed the check"
+        return f"Revised: {v.rewritten} rewritten, {v.removed} removed"
+    if node == "finaliser":
+        return f"Report ready ({u['report'].status})" if u.get("report") else None
+    return None
+
+
 async def run_research(
     question: str,
     *,
@@ -92,12 +132,14 @@ async def run_research(
     tool_ctx: ToolContext,
     use_web: bool = True,
     use_docs: bool = True,
+    on_event: OnEvent | None = None,
 ) -> Report:
     if not (use_web or use_docs):
         raise ValueError("Enable at least one of use_web / use_docs")
     limits = config.limits
     budget = RunBudget(limits.max_steps, limits.max_cost_gbp, limits.timeout_s)
     prompts = {name: load_prompt(name, v) for name, v in PROMPT_VERSIONS.items()}
+    report: Report | None = None
 
     async with Client(build_server(tool_ctx)) as mcp:
         listed = (await mcp.list_tools()).tools
@@ -110,11 +152,21 @@ async def run_research(
             prompts=prompts,
             research_tools=_research_tools(listed, use_web, use_docs),
         )
-        final = await build_graph().ainvoke(
-            {"question": question, "use_web": use_web, "use_docs": use_docs}, context=deps
-        )
+        # stream_mode="updates" yields {node: update} as each node finishes: the same run
+        # as ainvoke(), plus a progress line per step for the job's live event stream.
+        async for chunk in build_graph().astream(
+            {"question": question, "use_web": use_web, "use_docs": use_docs},
+            context=deps,
+            stream_mode="updates",
+        ):
+            for node, update in chunk.items():
+                if node == "finaliser" and update:
+                    report = update["report"]
+                if on_event and (message := describe(node, update)):
+                    await on_event(node, message)
 
-    report: Report = final["report"]
+    if report is None:  # the graph always ends in the finaliser; this is a bug guard
+        raise RuntimeError("research graph finished without a report")
     log.info(
         "research finished",
         extra={"status": report.status, "cost_gbp": report.cost_gbp, "latency_s": report.latency_s},

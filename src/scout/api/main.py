@@ -7,21 +7,27 @@ Run it with: uvicorn scout.api.main:create_app --factory
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
+from redis import Redis
 from sqlalchemy.orm import sessionmaker
 
 from scout import __version__
-from scout.api import routes_auth, routes_documents
+from scout.agent.runtime import Services
+from scout.api import routes_auth, routes_documents, routes_research
 from scout.auth import require_jwt_secret
 from scout.config import AppConfig, Secrets, get_config, get_secrets
 from scout.db import db_is_up, init_db, make_engine
+from scout.jobs.queue import InlineQueue, JobQueue, RQQueue
+from scout.llm.client import LLMClient
 from scout.log import setup_logging
 from scout.rag.models_ml import (
     CrossEncoderReranker,
@@ -34,22 +40,40 @@ from scout.schemas import HealthOut
 log = logging.getLogger(__name__)
 
 
+QueueFactory = Callable[[Services, asyncio.AbstractEventLoop], JobQueue]
+
+
+def default_queue(secrets: Secrets, config: AppConfig) -> QueueFactory:
+    if secrets.jobs_mode == "inline":
+        return lambda services, loop: InlineQueue(services, loop)
+    # Redis.from_url doesn't connect yet: the API starts without Redis, and a queueing
+    # attempt while Redis is down answers 503 instead of crashing.
+    timeout = config.limits.timeout_s + 120
+    return lambda services, loop: RQQueue(Redis.from_url(secrets.redis_url), timeout)
+
+
 def create_app(
     secrets: Secrets | None = None,
     config: AppConfig | None = None,
     embedder: Embedder | None = None,
     reranker: Reranker | None = None,
+    llm: LLMClient | None = None,
+    queue_factory: QueueFactory | None = None,
+    http_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
+    """Tests pass fakes (models, LLM, queue, web); production builds the real ones."""
     secrets = secrets or get_secrets()
     config = config or get_config()
     setup_logging(secrets.log_level)
     jwt_secret = require_jwt_secret(secrets.jwt_secret)
     engine = make_engine(secrets.database_url)
+    make_queue = queue_factory or default_queue(secrets, config)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         init_db(engine)
-        log.info("scout api started", extra={"version": __version__})
+        app.state.job_queue = make_queue(app.state.services, asyncio.get_running_loop())
+        log.info("scout api started", extra={"version": __version__, "jobs": secrets.jobs_mode})
         yield
         engine.dispose()
 
@@ -61,6 +85,16 @@ def create_app(
     # Real models load lazily on first use; tests pass small fakes instead.
     app.state.embedder = embedder or SentenceTransformerEmbedder(config.rag.embedding_model)
     app.state.reranker = reranker or CrossEncoderReranker(config.rag.reranker_model)
+    # Used by inline-mode jobs; the RQ worker builds its own from the environment.
+    app.state.services = Services(
+        config=config,
+        secrets=secrets,
+        session_factory=app.state.session_factory,
+        embedder=app.state.embedder,
+        reranker=app.state.reranker,
+        llm=llm,
+        http_transport=http_transport,
+    )
 
     @app.middleware("http")
     async def request_log(
@@ -94,4 +128,5 @@ def create_app(
 
     app.include_router(routes_auth.router)
     app.include_router(routes_documents.router)
+    app.include_router(routes_research.router)
     return app
