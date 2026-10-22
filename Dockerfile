@@ -18,6 +18,7 @@ COPY src ./src
 RUN pip install .
 
 COPY config.yaml ./
+COPY prompts ./prompts
 
 # Don't run as root: if the app is ever compromised, the attacker isn't root in the container.
 RUN useradd --create-home --uid 1000 scout \

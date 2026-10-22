@@ -20,3 +20,7 @@ htmlcov/
 .idea/
 Thumbs.db
 .DS_Store
+
+# Local SQLite databases and run outputs
+*.db
+runs/

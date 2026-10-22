@@ -126,6 +126,7 @@ async def _with_timeout[T](ctx: ToolContext, name: str, fn: Callable[[], Awaitab
 def build_server(ctx: ToolContext) -> MCPServer:
     server = MCPServer(
         "scout-tools",
+        log_level="WARNING",  # its INFO lines duplicate our own tool-call logs
         instructions=(
             "Read-only research tools. Every result has a source_id (S1, S2...). "
             "Cite facts with these ids; save_note only accepts ids returned by the tools."

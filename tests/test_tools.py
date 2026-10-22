@@ -1,7 +1,7 @@
 import asyncio
 import json
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -12,7 +12,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from scout.config import load_config
-from scout.db import Base, init_db, make_engine
 from scout.models import Note, ToolCall, User
 from scout.rag.store import ingest_pdf
 from scout.tools import impl
@@ -42,20 +41,6 @@ async def fake_resolver(host: str, port: int) -> list[str]:
     if host.replace(".", "").isdigit() or ":" in host:
         return [host]  # literal IP
     raise OSError("unknown host")
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
-@pytest.fixture
-def db_factory() -> Iterator[sessionmaker[Session]]:
-    engine = make_engine(TEST_DATABASE_URL)
-    init_db(engine)
-    yield sessionmaker(engine, expire_on_commit=False)
-    Base.metadata.drop_all(engine)
-    engine.dispose()
 
 
 def _user(factory: sessionmaker[Session], email: str = "uv@example.com") -> uuid.UUID:

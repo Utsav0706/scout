@@ -78,7 +78,19 @@ tools:
   fetch_max_chars: 20000    # cleaned text returned to the agent
   max_redirects: 5
 
+agent:
+  # Keeps a run inside max_steps: 1 plan + 4 sub-questions x 3 turns + 8 reads + 1 write = 22.
+  max_sub_questions: 4
+  max_tool_turns: 3          # tool-calling rounds per researcher
+  max_sources_to_read: 8     # reader calls per run (one per fetched page / doc passage)
+  max_source_chars: 8000     # source text sent to the reader, per source
+  max_notes_per_source: 5
+  # Money kept back for the writer: research stops early rather than leaving
+  # nothing to write the report with.
+  writer_reserve_gbp: 0.06
+
 limits:
+  # A step is one model call (planner, researcher turn, reader or writer).
   max_steps: 25
   max_cost_gbp: 0.20
   timeout_s: 180

@@ -20,13 +20,18 @@ class Base(DeclarativeBase):
 
 
 def make_engine(database_url: str) -> Engine:
-    if database_url.startswith("sqlite"):
-        # Tests only: one shared in-memory DB across threads (TestClient uses a thread).
+    if database_url in ("sqlite://", "sqlite:///:memory:"):
+        # Tests only: an in-memory DB exists per connection, so every thread must share
+        # one connection (StaticPool). Not safe for concurrent use; file DBs below are.
         return create_engine(
             database_url,
             connect_args={"check_same_thread": False},
             poolclass=StaticPool,
         )
+    if database_url.startswith("sqlite"):
+        # Local file DB: a connection per thread, and wait up to 15s for SQLite's write
+        # lock instead of failing at once when parallel tool calls write together.
+        return create_engine(database_url, connect_args={"check_same_thread": False, "timeout": 15})
     # pool_pre_ping drops dead connections (e.g. after Postgres restarts) instead of erroring.
     return create_engine(database_url, pool_pre_ping=True)
 

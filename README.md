@@ -7,9 +7,38 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M4a — LLM client.** Sign-up/login, PDF upload + hybrid search, the agent's
-four tools served over MCP, and one priced LLM client for every agent step. No research
-agent yet.
+Status: **M4 — first working agent.** Ask a question from the command line and get a
+cited report. Claims are not verified yet (M5).
+
+## Ask a question
+
+```bash
+py -m scout.agent.run "What is the current UK CPI inflation rate?" --user you@example.com
+```
+
+Without Postgres running, use a local SQLite file (web search only):
+
+```bash
+py -m scout.agent.run "your question" --user you@example.com --create-user --database-url sqlite:///scout_local.db --json runs/report.json
+```
+
+### How the agent works
+
+```
+START -> planner -> researcher x N (in parallel) -> reader -> writer -> finaliser -> END
+```
+
+| Step | Model | Job |
+|---|---|---|
+| planner | Sonnet 5.5 | Split the question into 2-4 sub-questions + a search plan |
+| researcher | Haiku 5.5 | Per sub-question, up to 3 rounds of tool calls (search, read pages, search docs) |
+| reader | Haiku 5.5 | Extract facts from each source read; saved as notes tied to the source id |
+| writer | Sonnet 5.5 | Write the report from the notes only; every claim cites source ids |
+| finaliser | (code) | Drop invented source ids, list cited sources, add cost/steps; markdown + JSON |
+
+Limits on every run: 25 model calls, £0.20, 180 s. Research stops early enough to keep
+money for the writer; if a limit is still hit, you get a partial report saying why.
+First live runs: **£0.023 / 35 s** and **£0.028 / 40 s** per report.
 
 ## Run it
 

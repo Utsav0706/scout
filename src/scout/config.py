@@ -106,6 +106,17 @@ class ToolsConfig(BaseModel):
     max_redirects: int = Field(default=5, ge=0, le=10)
 
 
+class AgentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_sub_questions: int = Field(default=4, ge=1, le=5)
+    max_tool_turns: int = Field(default=3, ge=1, le=10)
+    max_sources_to_read: int = Field(default=8, ge=1, le=30)
+    max_source_chars: int = Field(default=8000, ge=500, le=50_000)
+    max_notes_per_source: int = Field(default=5, ge=1, le=20)
+    writer_reserve_gbp: float = Field(default=0.06, ge=0)
+
+
 class AppConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -113,6 +124,7 @@ class AppConfig(BaseModel):
     auth: AuthConfig
     rag: RagConfig
     tools: ToolsConfig
+    agent: AgentConfig
     limits: Limits
     prices_usd_per_mtok: dict[str, ModelPrice]
     usd_to_gbp: float = Field(gt=0)
@@ -123,6 +135,8 @@ class AppConfig(BaseModel):
         unpriced = {n.model for n in self.llm.nodes.values()} - set(self.prices_usd_per_mtok)
         if unpriced:
             raise ValueError(f"prices_usd_per_mtok is missing: {sorted(unpriced)}")
+        if self.agent.writer_reserve_gbp >= self.limits.max_cost_gbp:
+            raise ValueError("agent.writer_reserve_gbp must be less than limits.max_cost_gbp")
         return self
 
 

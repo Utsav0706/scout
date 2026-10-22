@@ -25,11 +25,6 @@ REPO_CONFIG = Path(__file__).resolve().parents[1] / "config.yaml"
 CONFIG = load_config(REPO_CONFIG)
 
 
-@pytest.fixture
-def anyio_backend() -> str:
-    return "asyncio"
-
-
 def message(
     content: list[dict[str, Any]],
     *,
