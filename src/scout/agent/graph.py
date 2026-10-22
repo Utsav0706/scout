@@ -1,13 +1,15 @@
 """Wire the nodes into a LangGraph state graph and run it.
 
-    START -> planner -> researcher x N (parallel) -> reader -> writer -> verifier
-                                                          -> finaliser -> END
-                 \\------------- no sub-questions ------------------------^
+    START -> planner -> researcher x N (parallel) -> reader -> writer -> verifier -> reviser
+               |              ^                                                       |
+               |              +------ retry round for gaps (at most once) ------------+
+               |                                                                      v
+               +---------------- no sub-questions ----------------------------> finaliser -> END
 
 Why a graph library rather than a plain async function: the flow is explicit and
 inspectable (nodes + edges), parallel fan-out and the merging of results are handled
-by the framework, and M5 adds a conditional loop (reviser -> researcher, at most once)
-as one more edge instead of nested control flow.
+by the framework, and the retry loop is one conditional edge instead of nested control
+flow.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from scout.agent.budget import RunBudget
 from scout.agent.nodes import fan_out, finaliser, planner, reader, researcher, writer
 from scout.agent.prompts import load_prompt
 from scout.agent.report import Report
+from scout.agent.reviser import after_reviser, reviser
 from scout.agent.state import AgentDeps, ResearchState
 from scout.agent.verifier import verifier
 from scout.config import AppConfig
@@ -35,7 +38,15 @@ log = logging.getLogger(__name__)
 #   verifier v2: stricter "contradicted" rule (v1 flagged a correct claim, 1 of 3 runs).
 #   verifier v3: up to 3 quotes per claim, so a claim combining facts from different
 #                sentences can be backed without stitching them into one quote.
-PROMPT_VERSIONS = {"planner": 1, "researcher": 1, "reader": 1, "writer": 1, "verifier": 3}
+#   writer v2:   one fact per claim; compound claims caused both verifier mistakes in M5a.
+PROMPT_VERSIONS = {
+    "planner": 1,
+    "researcher": 1,
+    "reader": 1,
+    "writer": 2,
+    "verifier": 3,
+    "reviser": 1,
+}
 
 
 def build_graph():  # -> CompiledStateGraph
@@ -45,6 +56,7 @@ def build_graph():  # -> CompiledStateGraph
     g.add_node("reader", reader)
     g.add_node("writer", writer)
     g.add_node("verifier", verifier)
+    g.add_node("reviser", reviser)
     g.add_node("finaliser", finaliser)
 
     g.add_edge(START, "planner")
@@ -52,7 +64,8 @@ def build_graph():  # -> CompiledStateGraph
     g.add_edge("researcher", "reader")  # waits for every parallel researcher
     g.add_edge("reader", "writer")
     g.add_edge("writer", "verifier")
-    g.add_edge("verifier", "finaliser")
+    g.add_edge("verifier", "reviser")
+    g.add_conditional_edges("reviser", after_reviser, ["researcher", "finaliser"])
     g.add_edge("finaliser", END)
     return g.compile()
 

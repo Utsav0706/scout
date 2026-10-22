@@ -8,6 +8,7 @@ next step from them.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import uuid
 from urllib.parse import urljoin
@@ -130,6 +131,28 @@ def _html_to_text(html: str) -> tuple[str, str]:
 
 
 async def fetch_url(ctx: ToolContext, url: str) -> PageResult:
+    """Fetch with a per-job cache. Parallel researchers (and the retry round) often pick
+    the same URL; without the cache a site that blocks us is hit again and again, and
+    every repeat costs the agent a turn. A failed URL now fails at once, saying so.
+
+    The cache holds the download task itself, so researchers asking for the same URL at
+    the same moment share one download instead of each starting their own.
+    """
+    task = ctx.fetch_cache.get(url)
+    first = task is None
+    if first:
+        task = asyncio.ensure_future(_fetch_url_uncached(ctx, url))
+        ctx.fetch_cache[url] = task
+    try:
+        # shield: one caller hitting its tool timeout mustn't cancel the shared download.
+        return await asyncio.shield(task)
+    except ToolError as exc:
+        if first:
+            raise
+        raise ToolError(f"{exc} (Already tried in this research; pick another source.)") from None
+
+
+async def _fetch_url_uncached(ctx: ToolContext, url: str) -> PageResult:
     current = url
     # Follow redirects by hand so every hop goes through the SSRF check. With
     # automatic redirects, a public URL could bounce us to http://localhost.

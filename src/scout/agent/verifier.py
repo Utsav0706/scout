@@ -96,14 +96,12 @@ def _source_texts(evidence: list[Evidence], max_chars: int) -> dict[str, tuple[s
     return out
 
 
-async def verifier(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str, Any]:
-    deps = runtime.context
-    sections: list[Section] = state.get("sections") or []
-    claims = [c for sec in sections for c in sec.claims]
-    if not claims:
-        return {}
-
-    texts = _source_texts(state.get("evidence", []), deps.config.agent.max_source_chars)
+async def check_claims(
+    deps: AgentDeps, claims: list[Claim], evidence: list[Evidence]
+) -> list[Claim]:
+    """Return copies of `claims` with verdict and quote set. Used by the verifier node
+    and again by the reviser for rewritten claims, so both follow the same rules."""
+    texts = _source_texts(evidence, deps.config.agent.max_source_chars)
     by_source: dict[str, list[int]] = {}
     for i, claim in enumerate(claims):
         for sid in claim.source_ids:
@@ -141,19 +139,41 @@ async def verifier(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[st
 
     await asyncio.gather(*(check_source(sid, ids) for sid, ids in by_source.items()))
 
-    counts = {"supported": 0, "unsupported": 0, "contradicted": 0, "unverified": 0}
-    verified: list[Claim] = []
+    out = []
     for i, claim in enumerate(claims):
         final = combine(results.get(i, []))
-        verdict = final.verdict if final else "unverified"
-        counts[verdict] += 1
-        verified.append(
-            claim.model_copy(update={"verdict": verdict, "quote": final.quote if final else None})
+        out.append(
+            claim.model_copy(
+                update={
+                    "verdict": final.verdict if final else "unverified",
+                    "quote": final.quote if final else None,
+                }
+            )
         )
+    return out
 
+
+def count_verdicts(claims: list[Claim]) -> Verification:
+    counts = {"supported": 0, "unsupported": 0, "contradicted": 0, "unverified": 0}
+    for c in claims:
+        counts[c.verdict] += 1
+    return Verification(checked=len(claims), **counts)
+
+
+async def verifier(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str, Any]:
+    deps = runtime.context
+    sections: list[Section] = state.get("sections") or []
+    claims = [c for sec in sections for c in sec.claims]
+    todo = [i for i, c in enumerate(claims) if c.verdict == "unverified"]
+    if not todo:
+        return {}  # nothing new to check (e.g. a retry round that changed nothing)
+    checked = await check_claims(deps, [claims[i] for i in todo], state.get("evidence", []))
+    verified = list(claims)
+    for i, claim in zip(todo, checked, strict=True):
+        verified[i] = claim
     # Rebuild sections in the same order with the verdicts attached.
     it = iter(verified)
     new_sections = [
         Section(heading=s.heading, claims=[next(it) for _ in s.claims]) for s in sections
     ]
-    return {"sections": new_sections, "verification": Verification(checked=len(claims), **counts)}
+    return {"sections": new_sections, "verification": count_verdicts(verified)}

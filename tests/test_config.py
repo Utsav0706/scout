@@ -15,7 +15,7 @@ def _raw() -> dict:
 
 def test_repo_config_is_valid() -> None:
     cfg = load_config(REPO_CONFIG)
-    assert cfg.limits.max_steps == 25
+    assert cfg.limits.max_steps == 50
     assert cfg.llm.nodes["reader"].task_type == "extract"
 
 

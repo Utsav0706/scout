@@ -79,19 +79,25 @@ tools:
   max_redirects: 5
 
 agent:
-  # Keeps a run inside max_steps: 1 plan + 4 sub-questions x 3 turns + 8 reads + 1 write = 22.
   max_sub_questions: 4
   max_tool_turns: 3          # tool-calling rounds per researcher
-  max_sources_to_read: 8     # reader calls per run (one per fetched page / doc passage)
-  max_source_chars: 8000     # source text sent to the reader, per source
+  max_sources_to_read: 8     # reader calls in the first research round
+  max_source_chars: 8000     # source text sent to the reader and verifier, per source
   max_notes_per_source: 5
-  # Money kept back for the writer: research stops early rather than leaving
-  # nothing to write the report with.
-  writer_reserve_gbp: 0.06
+  # One extra research round for sub-questions left with no sources, or whose claims
+  # all failed verification. Never more than one.
+  max_retry_questions: 2
+  max_retry_sources: 4       # reader calls in the retry round
+  retry_min_budget_gbp: 0.10 # only retry if at least this much of max_cost_gbp is left
+  # Money kept back for writing, verifying and revising: research stops early (and the
+  # retry round is skipped) rather than leave nothing to finish the report with.
+  finish_reserve_gbp: 0.08
 
 limits:
-  # A step is one model call (planner, researcher turn, reader or writer).
-  max_steps: 25
+  # A step is one model call. Worst case without the retry round is ~34 (plan 1,
+  # research 12, read 8, write 1, verify 8, revise 1, re-verify 3); the retry round
+  # adds up to ~23. Typical runs use 25-40. The cost cap below is the real ceiling.
+  max_steps: 50
   max_cost_gbp: 0.20
   timeout_s: 180
 

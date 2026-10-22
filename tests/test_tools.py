@@ -412,3 +412,51 @@ async def test_rag_search_returns_cited_passages_for_this_user_only(db_factory) 
     text = _text(result)
     assert "policy.pdf, p. 1" in text and "S1" in text
     assert "secret" not in text
+
+
+# --- fetch cache (one download per URL per research job) ---
+
+
+def counting(handler):
+    calls = {"n": 0}
+
+    async def wrapped(req: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        await asyncio.sleep(0.05)  # long enough for parallel callers to overlap
+        return handler(req)
+
+    return wrapped, calls
+
+
+@pytest.mark.anyio
+async def test_failed_url_is_not_requested_again(db_factory) -> None:
+    handler, calls = counting(lambda r: httpx.Response(403))
+    ctx = make_ctx(db_factory, lambda r: html("x"))
+    ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(ToolError, match="HTTP 403"):
+        await impl.fetch_url(ctx, "https://example.com/blocked")
+    with pytest.raises(ToolError, match="Already tried"):
+        await impl.fetch_url(ctx, "https://example.com/blocked")
+    assert calls["n"] == 1
+
+
+@pytest.mark.anyio
+async def test_fetched_page_is_reused(db_factory) -> None:
+    handler, calls = counting(lambda r: html("Cached body."))
+    ctx = make_ctx(db_factory, lambda r: html("x"))
+    ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    first = await impl.fetch_url(ctx, "https://example.com/page")
+    second = await impl.fetch_url(ctx, "https://example.com/page")
+    assert first == second and calls["n"] == 1
+
+
+@pytest.mark.anyio
+async def test_simultaneous_requests_share_one_download(db_factory) -> None:
+    handler, calls = counting(lambda r: html("Shared."))
+    ctx = make_ctx(db_factory, lambda r: html("x"))
+    ctx.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    pages = await asyncio.gather(
+        *(impl.fetch_url(ctx, "https://example.com/same") for _ in range(3))
+    )
+    assert calls["n"] == 1
+    assert len({p.source_id for p in pages}) == 1

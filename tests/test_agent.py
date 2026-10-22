@@ -166,7 +166,14 @@ async def test_full_run_produces_cited_report(db_factory) -> None:
     v = report.verification
     assert (v.checked, v.supported, v.support_rate) == (2, 2, 1.0)
     assert report.cost_gbp == pytest.approx(0.001 * len(llm.calls))
-    assert set(report.prompt_versions) == {"planner", "researcher", "reader", "writer", "verifier"}
+    assert set(report.prompt_versions) == {
+        "planner",
+        "researcher",
+        "reader",
+        "writer",
+        "verifier",
+        "reviser",
+    }
 
 
 @pytest.mark.anyio
@@ -284,7 +291,7 @@ async def test_cost_limit_keeps_money_for_the_writer(db_factory) -> None:
 
     capped = CONFIG.model_copy(deep=True)
     capped.limits.max_cost_gbp = 0.20
-    capped.agent.writer_reserve_gbp = 0.06
+    capped.agent.finish_reserve_gbp = 0.06
     report, llm, _ = await run(db_factory, script=script, config=capped)
     assert report.status == "partial"
     assert "cost limit" in report.stop_reason

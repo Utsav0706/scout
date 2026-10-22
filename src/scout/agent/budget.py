@@ -51,6 +51,16 @@ class RunBudget:
             self.stop_reason = self.stop_reason or reason
             raise BudgetExceeded(reason)
 
+    def has_room(self, gbp: float) -> bool:
+        """Is there at least `gbp` of budget left (and steps and time)? Unlike check(),
+        a "no" here is a decision (e.g. skip the retry round), not a stop: it doesn't
+        set stop_reason or mark the report partial."""
+        return (
+            self.steps < self.max_steps
+            and self.cost_gbp + gbp < self.max_cost_gbp
+            and self.elapsed_s < self.timeout_s
+        )
+
     def charge(self, cost_gbp: float, steps: int = 1) -> None:
         self.cost_gbp += cost_gbp
         self.steps += steps

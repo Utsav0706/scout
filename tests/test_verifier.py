@@ -4,12 +4,24 @@ import re
 
 import pytest
 
-from scout.agent.report import to_markdown
-from scout.agent.state import ClaimVerdict, DraftClaim, DraftOut, DraftSection, VerifyOut
+from scout.agent.budget import RunBudget
+from scout.agent.prompts import load_prompt
+from scout.agent.report import Claim, Report, Section, to_markdown
+from scout.agent.state import (
+    AgentDeps,
+    ClaimVerdict,
+    DraftClaim,
+    DraftOut,
+    DraftSection,
+    Evidence,
+    VerifyOut,
+)
 from scout.agent.verifier import (
     CheckedVerdict,
+    check_claims,
     check_verdict,
     combine,
+    count_verdicts,
     quote_in_source,
     tokens,
 )
@@ -180,10 +192,38 @@ async def test_verifier_reads_the_source_text_not_the_notes(db_factory) -> None:
     assert "Fact from" not in content  # not the reader's notes
 
 
+# --- check_claims directly (the reviser acts on failures, so test the verdicts here) ---
+
+SRC = Evidence(
+    source_id="S1",
+    title="ONS",
+    text="CPI rose by 3.5% in the 12 months to September 2026, up from 3.1% in August.",
+    sub_question="q",
+)
+CLAIMS = [
+    Claim(text="CPI was 3.5% in September 2026.", source_ids=["S1"]),
+    Claim(text="CPI was up from 3.1% in August.", source_ids=["S1"]),
+]
+
+
+def make_deps(verifier_fn) -> AgentDeps:
+    """Just enough of a run to call check_claims with a scripted verifier."""
+    from tests.test_agent import FakeLLM
+
+    return AgentDeps(
+        config=CONFIG,
+        llm=FakeLLM(lambda node, kw: verifier_fn(kw["messages"][0]["content"])),
+        mcp=None,
+        tool_ctx=None,
+        budget=RunBudget(50, 0.20, 180),
+        prompts={"verifier": load_prompt("verifier", 3)},
+        research_tools=[],
+    )
+
+
 @pytest.mark.anyio
-async def test_invented_quotes_make_claims_unsupported(db_factory) -> None:
+async def test_invented_quotes_make_claims_unsupported() -> None:
     def fake(content):
-        ids = [int(i) for i in re.findall(r"^\[(\d+)\]", content.split("<claims>")[1], re.M)]
         return result(
             "verifier",
             parsed=VerifyOut(
@@ -194,37 +234,63 @@ async def test_invented_quotes_make_claims_unsupported(db_factory) -> None:
                         quotes=["a quote that is not there"],
                         reason="r",
                     )
-                    for i in ids
+                    for i in (0, 1)
                 ]
             ),
         )
 
-    report, _, _ = await run(db_factory, script=script_with(fake))
-    assert {c.verdict for c in _claims(report)} == {"unsupported"}
-    assert report.verification.support_rate == 0.0
-    assert "[not supported by source]" in to_markdown(report)
+    checked = await check_claims(make_deps(fake), CLAIMS, [SRC])
+    assert [c.verdict for c in checked] == ["unsupported", "unsupported"]
+    assert count_verdicts(checked).support_rate == 0.0
 
 
 @pytest.mark.anyio
-async def test_contradicted_claims_are_flagged(db_factory) -> None:
-    report, _, _ = await run(
-        db_factory,
-        script=script_with(
-            lambda content: result("verifier", parsed=verify_all(content, "contradicted"))
-        ),
+async def test_real_quotes_keep_the_verdict_and_are_attached() -> None:
+    checked = await check_claims(
+        make_deps(lambda content: result("verifier", parsed=verify_all(content, "contradicted"))),
+        CLAIMS,
+        [SRC],
     )
-    assert {c.verdict for c in _claims(report)} == {"contradicted"}
-    assert report.verification.contradicted == 2
-    assert "[contradicted by source]" in to_markdown(report)
+    assert [c.verdict for c in checked] == ["contradicted", "contradicted"]
+    assert all(c.quote for c in checked)
+    assert count_verdicts(checked).contradicted == 2
 
 
 @pytest.mark.anyio
-async def test_skipped_claims_count_as_unsupported(db_factory) -> None:
-    report, _, _ = await run(
-        db_factory,
-        script=script_with(lambda content: result("verifier", parsed=VerifyOut(verdicts=[]))),
+async def test_skipped_claims_count_as_unsupported() -> None:
+    checked = await check_claims(
+        make_deps(lambda content: result("verifier", parsed=VerifyOut(verdicts=[]))),
+        CLAIMS,
+        [SRC],
     )
-    assert {c.verdict for c in _claims(report)} == {"unsupported"}
+    assert [c.verdict for c in checked] == ["unsupported", "unsupported"]
+
+
+@pytest.mark.anyio
+async def test_claims_citing_unread_sources_stay_unverified() -> None:
+    claim = Claim(text="Something.", source_ids=["S9"])
+    checked = await check_claims(make_deps(lambda c: AssertionError("not called")), [claim], [SRC])
+    assert checked[0].verdict == "unverified"
+
+
+def test_markdown_flags_every_verdict_except_supported() -> None:
+    claims = [
+        Claim(text=f"{v} claim.", source_ids=["S1"], verdict=v)
+        for v in ("supported", "unsupported", "contradicted", "unverified")
+    ]
+    report = Report(
+        question="q",
+        status="complete",
+        summary="s",
+        cost_gbp=0,
+        latency_s=0,
+        sections=[Section(heading="h", claims=claims)],
+    )
+    md = to_markdown(report)
+    assert "- supported claim." in md
+    assert "[not supported by source]** unsupported claim." in md
+    assert "[contradicted by source]** contradicted claim." in md
+    assert "[not checked]** unverified claim." in md
 
 
 @pytest.mark.anyio

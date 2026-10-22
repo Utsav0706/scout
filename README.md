@@ -7,8 +7,9 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M5a — verified claims.** Ask a question from the command line and get a cited
-report in which every claim has been checked against the source text it cites.
+Status: **M5 — verified, revised reports.** Ask a question from the command line and get a
+cited report in which every claim has been checked against the source text it cites;
+claims that fail are rewritten (and re-checked) or removed.
 
 ## Ask a question
 
@@ -25,7 +26,11 @@ py -m scout.agent.run "your question" --user you@example.com --create-user --dat
 ### How the agent works
 
 ```
-START -> planner -> researcher x N (in parallel) -> reader -> writer -> verifier -> finaliser -> END
+START -> planner -> researcher x N (in parallel) -> reader -> writer -> verifier -> reviser
+                          ^                                                       |
+                          +--------- retry round for gaps (at most once) ---------+
+                                                                                  v
+                                                                      finaliser -> END
 ```
 
 | Step | Model | Job |
@@ -35,10 +40,12 @@ START -> planner -> researcher x N (in parallel) -> reader -> writer -> verifier
 | reader | Haiku 5.5 | Extract facts from each source read; saved as notes tied to the source id |
 | writer | Sonnet 5.5 | Write the report from the notes only; every claim cites source ids |
 | verifier | Haiku 5.5 | Check each claim against the source text it cites: supported / unsupported / contradicted, with verbatim quotes |
+| reviser | Sonnet 5.5 | Only if something failed: rewrite (then re-verify) or delete failed claims; rewrite the summary. Sends unanswered sub-questions back for one more research round |
 | finaliser | (code) | Drop invented source ids, list cited sources, add cost/steps; markdown + JSON |
 
-Limits on every run: 25 model calls, £0.20, 180 s. Research stops early enough to keep
-money for the writer; if a limit is still hit, you get a partial report saying why.
+Limits on every run: 50 model calls, £0.20, 180 s. Research stops early enough to keep
+money for writing, checking and revising; if a limit is still hit, you get a partial
+report saying why.
 First live runs: **£0.023 / 35 s** and **£0.028 / 40 s** per report (M4); with
 verification **£0.030–0.033 / 40 s**.
 
@@ -59,6 +66,23 @@ Found while building it (live runs, checked by hand):
   (`models , may`); quotes are now compared word by word, ignoring punctuation.
 - A loose "contradicted" rule flagged a correct claim; the rubric now requires a
   conflicting statement about the *same* measure and period (prompt `verifier_v2`→`v3`).
+
+### Revision and the retry round
+
+If every claim passes, the reviser makes no model call. Otherwise it rewrites or deletes
+each failed claim; every rewrite goes through the same verifier again and is dropped if
+it still fails, so the final report contains only claims that passed a check (or are
+explicitly flagged "not checked" when a limit stopped verification). The `verification`
+block keeps the **first-check** support rate (how faithful the writer was) plus how many
+claims were rewritten and removed.
+
+Sub-questions that ended with no sources read, or whose claims all failed, get **one**
+more research round with a hint to search differently (only if £0.10+ of budget is left).
+A per-job fetch cache stops parallel researchers re-downloading, or re-trying, the same URL.
+
+**Known limitation:** many UK policy sites (parliament.uk, health.org.uk, ...) answer 403
+to non-browser clients, and `fetch_url` can't read PDFs, so some questions end with few
+pages read. Scout reports this under limitations rather than guessing.
 
 ## Run it
 

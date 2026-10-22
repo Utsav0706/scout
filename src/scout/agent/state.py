@@ -45,11 +45,16 @@ class ResearchState(TypedDict, total=False):
     sub_questions: list[str]
     # operator.add: parallel researchers each return a list, LangGraph concatenates them.
     evidence: Annotated[list[Evidence], operator.add]
-    notes: list[NoteItem]
+    # Accumulate across the (optional) second research round instead of being replaced.
+    notes: Annotated[list[NoteItem], operator.add]
+    read_source_ids: Annotated[list[str], operator.add]  # sources the reader has read
+    research_round: int  # 1, or 2 after the reviser sends gaps back to research
+    retry_questions: list[str]  # set by the reviser when it wants another round
     # Written by the writer (source ids already cleaned), then given verdicts by the verifier.
     summary: str
     sections: list[Any]  # list[report.Section]
     writer_limitations: list[str]
+    notes_at_write: int  # len(notes) when the writer last wrote
     verification: Any  # report.Verification | None
     problems: Annotated[list[str], operator.add]  # non-fatal issues for "limitations"
     report: Any  # report.Report, set by the finaliser
@@ -61,6 +66,7 @@ class ResearcherInput(TypedDict):
     question: str
     sub_question: str
     search_plan: str
+    hint: str  # extra instruction for a retry round; "" the first time
 
 
 @dataclass
@@ -115,3 +121,14 @@ class ClaimVerdict(BaseModel):
 
 class VerifyOut(BaseModel):
     verdicts: list[ClaimVerdict]
+
+
+class ClaimRevision(BaseModel):
+    claim_id: int
+    action: Literal["rewrite", "delete"]
+    text: str = Field(default="", description="The rewritten claim (empty when deleting)")
+
+
+class ReviseOut(BaseModel):
+    revisions: list[ClaimRevision]
+    summary: str

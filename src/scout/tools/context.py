@@ -11,6 +11,7 @@ import threading
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from pydantic import BaseModel
@@ -66,3 +67,5 @@ class ToolContext:
     resolver: Resolver
     tavily_api_key: str | None
     sources: SourceRegistry = field(default_factory=SourceRegistry)
+    # url -> the asyncio Task fetching it (done or in flight); see impl.fetch_url.
+    fetch_cache: dict[str, Any] = field(default_factory=dict)

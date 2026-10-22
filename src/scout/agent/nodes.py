@@ -77,7 +77,10 @@ def fan_out(state: ResearchState) -> list[Send] | str:
         Send(
             "researcher",
             ResearcherInput(
-                question=state["question"], sub_question=q, search_plan=state.get("search_plan", "")
+                question=state["question"],
+                sub_question=q,
+                search_plan=state.get("search_plan", ""),
+                hint="",
             ),
         )
         for q in state["sub_questions"]
@@ -119,7 +122,10 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
         search_plan=state["search_plan"] or "Use reliable sources.",
         max_tool_turns=cfg.max_tool_turns,
     )
-    messages: list[dict[str, Any]] = [{"role": "user", "content": state["sub_question"]}]
+    ask = state["sub_question"]
+    if state.get("hint"):
+        ask += "\n\n" + state["hint"]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": ask}]
     evidence: list[Evidence] = []
     problems: list[str] = []
 
@@ -128,7 +134,7 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
             res = await llm_call(
                 deps,
                 "researcher",
-                reserve_gbp=cfg.writer_reserve_gbp,
+                reserve_gbp=cfg.finish_reserve_gbp,
                 system=system,
                 messages=messages,
                 tools=deps.research_tools,
@@ -154,8 +160,7 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
         messages.append({"role": "assistant", "content": res.content})
         messages.append({"role": "user", "content": results})
 
-    if not evidence:
-        problems.append(f"No sources were read for: {state['sub_question']}")
+    # Sub-questions left without sources are reported by the finaliser, after any retry.
     return {"evidence": evidence, "problems": problems}
 
 
@@ -194,7 +199,14 @@ def _pick_sources(evidence: list[Evidence], limit: int) -> list[Evidence]:
 async def reader(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str, Any]:
     deps = runtime.context
     cfg = deps.config.agent
-    sources = _pick_sources(state.get("evidence", []), cfg.max_sources_to_read)
+    # Only sources not read in an earlier round; the retry round reads fewer.
+    already = set(state.get("read_source_ids", []))
+    unread = [ev for ev in state.get("evidence", []) if ev.source_id not in already]
+    retry = state.get("research_round", 1) > 1
+    if retry:  # read what the retry found, not leftovers from the first round
+        unread = [ev for ev in unread if ev.sub_question in state.get("retry_questions", [])]
+    limit = cfg.max_retry_sources if retry else cfg.max_sources_to_read
+    sources = _pick_sources(unread, limit)
     system = deps.prompts["reader"].render(
         question=state["question"], max_notes=cfg.max_notes_per_source
     )
@@ -211,7 +223,7 @@ async def reader(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
                 res = await llm_call(
                     deps,
                     "reader",
-                    reserve_gbp=cfg.writer_reserve_gbp,
+                    reserve_gbp=cfg.finish_reserve_gbp,
                     system=system,
                     output_format=ReaderOut,
                     messages=[{"role": "user", "content": content}],
@@ -232,7 +244,10 @@ async def reader(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
             return notes
 
     batches = await asyncio.gather(*(read_one(ev) for ev in sources))
-    return {"notes": [n for batch in batches for n in batch]}
+    return {
+        "notes": [n for batch in batches for n in batch],
+        "read_source_ids": [ev.source_id for ev in sources],
+    }
 
 
 # --- writer ---
@@ -255,6 +270,8 @@ async def writer(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
     notes = state.get("notes", [])
     if not notes:
         return {}  # nothing to write from: no model call, no cost
+    if state.get("sections") and len(notes) == state.get("notes_at_write"):
+        return {}  # retry round found nothing new: keep the existing report, don't pay twice
     system = deps.prompts["writer"].render(question=state["question"])
     try:
         res = await llm_call(
@@ -273,7 +290,12 @@ async def writer(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
     limitations = list(draft.limitations)
     if dropped:
         limitations.append(f"{dropped} claim(s) removed because they cited no real source.")
-    return {"summary": draft.summary, "sections": sections, "writer_limitations": limitations}
+    return {
+        "summary": draft.summary,
+        "sections": sections,
+        "writer_limitations": limitations,
+        "notes_at_write": len(notes),
+    }
 
 
 def _clean_draft(draft: DraftOut, known: set[str]) -> tuple[list[Section], int]:
@@ -301,6 +323,12 @@ async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[s
     budget = deps.budget
     notes = state.get("notes", [])
     limitations = list(state.get("writer_limitations", [])) + list(state.get("problems", []))
+    researched = {ev.sub_question for ev in state.get("evidence", [])}
+    limitations += [
+        f"No sources were read for: {q}"
+        for q in state.get("sub_questions", [])
+        if q not in researched
+    ]
     sections: list[Section] = state.get("sections") or []
 
     if sections:

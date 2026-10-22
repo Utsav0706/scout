@@ -114,7 +114,10 @@ class AgentConfig(BaseModel):
     max_sources_to_read: int = Field(default=8, ge=1, le=30)
     max_source_chars: int = Field(default=8000, ge=500, le=50_000)
     max_notes_per_source: int = Field(default=5, ge=1, le=20)
-    writer_reserve_gbp: float = Field(default=0.06, ge=0)
+    max_retry_questions: int = Field(default=2, ge=0, le=5)
+    max_retry_sources: int = Field(default=4, ge=1, le=20)
+    retry_min_budget_gbp: float = Field(default=0.10, ge=0)
+    finish_reserve_gbp: float = Field(default=0.08, ge=0)
 
 
 class AppConfig(BaseModel):
@@ -135,8 +138,8 @@ class AppConfig(BaseModel):
         unpriced = {n.model for n in self.llm.nodes.values()} - set(self.prices_usd_per_mtok)
         if unpriced:
             raise ValueError(f"prices_usd_per_mtok is missing: {sorted(unpriced)}")
-        if self.agent.writer_reserve_gbp >= self.limits.max_cost_gbp:
-            raise ValueError("agent.writer_reserve_gbp must be less than limits.max_cost_gbp")
+        if self.agent.finish_reserve_gbp >= self.limits.max_cost_gbp:
+            raise ValueError("agent.finish_reserve_gbp must be less than limits.max_cost_gbp")
         return self
 
 
