@@ -8,6 +8,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
+from scout.safety.injection import strip_hidden
+
 
 class Credentials(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -82,7 +84,8 @@ class ResearchIn(BaseModel):
     @field_validator("question")
     @classmethod
     def strip_question(cls, v: str) -> str:
-        v = " ".join(v.split())
+        # Invisible/control characters can hide text from whoever reads the question back.
+        v = " ".join(strip_hidden(v).split())
         if len(v) < 5:
             raise ValueError("question is too short")
         return v

@@ -318,11 +318,27 @@ def _clean_draft(draft: DraftOut, known: set[str]) -> tuple[list[Section], int]:
 # --- finaliser (no model call) ---
 
 
+def _injection_notes(deps: AgentDeps, limit: int = 5) -> list[str]:
+    """One line per source that contained text aimed at the AI (see safety.injection)."""
+    notes = []
+    for sid, findings in deps.tool_ctx.injection_findings.items():
+        src = deps.tool_ctx.sources.get(sid)
+        kinds = ", ".join(sorted({f.kind for f in findings}))
+        notes.append(
+            f"Source {sid} ({src.title if src else 'unknown'}) contained text that looked like "
+            f"instructions to an AI ({kinds}); Scout treated it only as data."
+        )
+    if len(notes) > limit:
+        notes = notes[:limit] + [f"...and {len(notes) - limit} more such sources."]
+    return notes
+
+
 async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str, Any]:
     deps = runtime.context
     budget = deps.budget
     notes = state.get("notes", [])
     limitations = list(state.get("writer_limitations", [])) + list(state.get("problems", []))
+    limitations += _injection_notes(deps)
     researched = {ev.sub_question for ev in state.get("evidence", [])}
     limitations += [
         f"No sources were read for: {q}"

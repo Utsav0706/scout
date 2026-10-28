@@ -21,6 +21,7 @@ from scout.api.deps import CurrentUser, DbSession
 from scout.jobs.queue import QueueUnavailableError
 from scout.jobs.runner import TERMINAL
 from scout.models import JobEvent, ResearchJob
+from scout.safety.injection import scan
 from scout.schemas import JobCreatedOut, JobEventOut, JobOut, ResearchIn
 
 log = logging.getLogger(__name__)
@@ -66,6 +67,12 @@ def start_research(
             headers={"Retry-After": str(max(1, math.ceil(wait)))},
         )
 
+    if findings := scan(body.question):
+        # Logged, not refused: it's the user's own agent, and its tools are read-only.
+        log.warning(
+            "question looks like a prompt-injection attempt",
+            extra={"user_id": str(user.id), "kinds": sorted({f.kind for f in findings})},
+        )
     job = ResearchJob(
         user_id=user.id, question=body.question, use_web=body.use_web, use_docs=body.use_docs
     )

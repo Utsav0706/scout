@@ -7,7 +7,7 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M6 — research API with background workers.** `POST /research` returns a job id
+Status: **M7a — research API with prompt-injection defences.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -142,6 +142,30 @@ Vectors catch paraphrases ("money back" ≈ "refund"); keywords catch exact name
 and numbers. RRF merges the two ranked lists without having to compare their raw scores.
 The cross-encoder then reads query + chunk together to put the best ones first. Every
 search is limited to the caller's own documents.
+
+## Safety: outside text is data, never instructions
+
+Web pages, search snippets and uploaded PDFs can contain text aimed at the AI ("ignore
+your instructions and..."). Scout's defence has three layers; only the last one tries to
+*spot* attacks, and the first one is what actually limits the damage:
+
+1. **Capability limits.** No tool can send, post, buy or delete (tools carry MCP
+   `readOnlyHint` annotations, and a test fails if a write-capable tool appears).
+   `fetch_url` opens only links this job's searches returned or the question contained,
+   so a page can't steer the agent to `https://attacker/?q=<your data>`; it also refuses
+   internal addresses (SSRF). Document search is bound to the job's user; notes must cite
+   real source ids.
+2. **Structure.** Outside text reaches the models inside `<source>` tags (which pages
+   can't close), and every prompt says it is data, never instructions.
+3. **Detection.** A rule-based scanner (free, deterministic, tested in CI) checks every
+   page, snippet and PDF passage for override phrases, fake role markers, tool directives,
+   exfiltration links and **hidden Unicode** (invisible "tag" characters, zero-width
+   spaces). Hidden characters are stripped; a flagged source is kept (an article *about*
+   prompt injection is legitimate) but the model gets a warning, the finding is logged,
+   and the report says which sources contained such text.
+
+Deliberately **no keyword topic filter**: keyword lists block innocent questions and miss
+real ones; Claude's own safety training and Scout's refusal handling cover harmful requests.
 
 ## Tools (MCP server)
 

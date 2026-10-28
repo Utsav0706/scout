@@ -72,3 +72,8 @@ class ToolContext:
     sources: SourceRegistry = field(default_factory=SourceRegistry)
     # url -> the asyncio Task fetching it (done or in flight); see impl.fetch_url.
     fetch_cache: dict[str, Any] = field(default_factory=dict)
+    # Prompt-injection findings per source id, for logs and the report (safety.injection).
+    injection_findings: dict[str, list[Any]] = field(default_factory=dict)
+    # Link allowlist: if set, fetch_url only opens URLs in it (normalised), i.e. URLs this
+    # job's web_search returned or the question contained. None = no restriction.
+    known_urls: set[str] | None = None

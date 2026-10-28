@@ -9,10 +9,11 @@ next step from them.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 import uuid
 from typing import Literal
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import anyio
 import httpx
@@ -22,8 +23,11 @@ from pydantic import BaseModel
 
 from scout.models import Note
 from scout.rag import store
+from scout.safety.injection import clean, scan, warning_for
 from scout.tools.context import ToolContext
 from scout.tools.netguard import BlockedURLError, check_url
+
+log = logging.getLogger(__name__)
 
 TAVILY_URL = "https://api.tavily.com/search"
 TAVILY_EXTRACT_URL = "https://api.tavily.com/extract"
@@ -44,6 +48,7 @@ class WebResult(BaseModel):
     title: str
     url: str
     snippet: str
+    warning: str | None = None  # set when the text looks like a prompt-injection attempt
 
 
 class PageResult(BaseModel):
@@ -53,6 +58,7 @@ class PageResult(BaseModel):
     text: str
     truncated: bool
     via: Literal["direct", "tavily_extract"] = "direct"  # tavily_extract costs credits
+    warning: str | None = None
 
 
 class DocResult(BaseModel):
@@ -61,6 +67,7 @@ class DocResult(BaseModel):
     page: int
     text: str
     score: float
+    warning: str | None = None
 
 
 class NoteResult(BaseModel):
@@ -100,14 +107,44 @@ async def web_search(ctx: ToolContext, query: str) -> list[WebResult]:
         url = str(item.get("url", ""))
         if not url:
             continue
-        title = str(item.get("title") or url)
-        src = ctx.sources.register(url, title, url)
+        if ctx.known_urls is not None:
+            ctx.known_urls.add(normalise_url(url))
+        src = ctx.sources.register(url, str(item.get("title") or url), url)
+        (title, snippet), warning = guard_texts(
+            ctx, src.id, str(item.get("title") or url), str(item.get("content", ""))[:500]
+        )
         results.append(
-            WebResult(
-                source_id=src.id, title=title, url=url, snippet=str(item.get("content", ""))[:500]
-            )
+            WebResult(source_id=src.id, title=title, url=url, snippet=snippet, warning=warning)
         )
     return results
+
+
+def guard_texts(ctx: ToolContext, source_id: str, *texts: str) -> tuple[list[str], str | None]:
+    """Clean outside text and scan it for prompt injection (see safety.injection).
+    Returns the cleaned texts and, if anything was found, a warning for the model."""
+    findings = [f for t in texts for f in scan(t)]
+    cleaned = [clean(t)[0] for t in texts]
+    if not findings:
+        return cleaned, None
+    ctx.injection_findings.setdefault(source_id, []).extend(findings)
+    log.warning(
+        "prompt injection suspected",
+        extra={
+            "job_id": str(ctx.job_id),
+            "source_id": source_id,
+            "kinds": sorted({f.kind for f in findings}),
+            "excerpt": findings[0].excerpt[:200],
+        },
+    )
+    return cleaned, warning_for(findings)
+
+
+def normalise_url(url: str) -> str:
+    """For allowlist comparison: lower-case scheme/host, no fragment, no trailing slash."""
+    parts = urlsplit(url.strip())
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, "")
+    )
 
 
 def _decode(data: bytes, declared: str) -> str:
@@ -149,6 +186,13 @@ async def fetch_url(ctx: ToolContext, url: str) -> PageResult:
     The cache holds the download task itself, so researchers asking for the same URL at
     the same moment share one download instead of each starting their own.
     """
+    if ctx.known_urls is not None and normalise_url(url) not in ctx.known_urls:
+        # Only links this job's searches returned (or the question gave) can be opened.
+        # Stops a page steering the agent to e.g. https://attacker/?q=<your document text>.
+        raise ToolError(
+            f"fetch_url can only open links returned by web_search in this research (or "
+            f"given in the question); {url} isn't one. Search for it first."
+        )
     task = ctx.fetch_cache.get(url)
     first = task is None
     if first:
@@ -202,6 +246,7 @@ async def _tavily_extract(ctx: ToolContext, url: str, direct_error: ToolError) -
     known = ctx.sources.get_by_key(url)  # keep the title web_search gave it, if any
     title = known.title if known else url
     src = ctx.sources.register(url, title, url)
+    (title, text), warning = guard_texts(ctx, src.id, title, text)
     limit = ctx.cfg.fetch_max_chars
     return PageResult(
         source_id=src.id,
@@ -210,6 +255,7 @@ async def _tavily_extract(ctx: ToolContext, url: str, direct_error: ToolError) -
         text=text[:limit],
         truncated=len(text) > limit,
         via="tavily_extract",
+        warning=warning,
     )
 
 
@@ -263,12 +309,14 @@ async def _fetch_url_uncached(ctx: ToolContext, url: str) -> PageResult:
             raise ToolError(f"fetch_url found no readable text on {current}.")
         limit = ctx.cfg.fetch_max_chars
         src = ctx.sources.register(url, title or current, current)
+        (title, text), warning = guard_texts(ctx, src.id, title or current, text)
         return PageResult(
             source_id=src.id,
-            title=title or current,
+            title=title,
             url=current,
             text=text[:limit],
             truncated=len(text) > limit,
+            warning=warning,
         )
     raise ToolError(f"fetch_url gave up after {ctx.cfg.max_redirects} redirects on {url}.")
 
@@ -302,8 +350,17 @@ async def rag_search(
         src = ctx.sources.register(
             f"chunk:{h.chunk_id}", title, f"doc:{h.document_id}#page={h.page}"
         )
+        # Uploaded PDFs are outside text too: a document can carry an injection.
+        (text,), warning = guard_texts(ctx, src.id, h.text)
         results.append(
-            DocResult(source_id=src.id, title=title, page=h.page, text=h.text, score=h.score)
+            DocResult(
+                source_id=src.id,
+                title=title,
+                page=h.page,
+                text=text,
+                score=h.score,
+                warning=warning,
+            )
         )
     return results
 

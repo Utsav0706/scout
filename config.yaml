@@ -80,6 +80,9 @@ tools:
   # When a site refuses us (403 etc.) or the link is a PDF, read it via Tavily Extract
   # instead: 1 credit per 5 successful pages (failures are free).
   extract_fallback: true
+  # fetch_url only opens links that this job's web_search returned or that appear in the
+  # question. Blocks a page steering the agent to https://attacker/?q=<your data>.
+  fetch_only_known_urls: true
 
 agent:
   max_sub_questions: 4

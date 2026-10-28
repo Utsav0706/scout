@@ -7,6 +7,7 @@ Per run we add a ToolContext (bound to one user and one job) and an HTTP client.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -26,9 +27,12 @@ from scout.rag.models_ml import (
     SentenceTransformerEmbedder,
 )
 from scout.tools.context import Resolver, ToolContext
+from scout.tools.impl import normalise_url
 from scout.tools.netguard import system_resolver
 
 USER_AGENT = "ScoutResearchBot/0.1"
+# Links written in the question may be opened by fetch_url (see the link allowlist).
+URL_IN_TEXT = re.compile(r"https?://[^\s<>\"')\]]+[^\s<>\"')\].,;:!?]")
 
 
 @dataclass
@@ -66,7 +70,11 @@ class Services:
 
 @asynccontextmanager
 async def tool_context(
-    services: Services, user_id: uuid.UUID, job_id: uuid.UUID, http: httpx.AsyncClient | None = None
+    services: Services,
+    user_id: uuid.UUID,
+    job_id: uuid.UUID,
+    http: httpx.AsyncClient | None = None,
+    question: str = "",
 ) -> AsyncIterator[ToolContext]:
     """A ToolContext bound to one user and one job, with its own HTTP client."""
     own_client = http is None
@@ -86,6 +94,11 @@ async def tool_context(
             http=client,
             resolver=services.resolver,
             tavily_api_key=tavily.get_secret_value() if tavily else None,
+            known_urls=(
+                {normalise_url(u) for u in URL_IN_TEXT.findall(question)}
+                if services.config.tools.fetch_only_known_urls
+                else None
+            ),
         )
     finally:
         if own_client:
@@ -103,7 +116,7 @@ async def research(
     on_event: OnEvent | None = None,
     http: httpx.AsyncClient | None = None,
 ) -> Report:
-    async with tool_context(services, user_id, job_id, http) as ctx:
+    async with tool_context(services, user_id, job_id, http, question) as ctx:
         return await run_research(
             question,
             config=services.config,

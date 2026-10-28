@@ -26,6 +26,7 @@ import httpx
 from mcp.server.context import CallNext, HandlerResult, ServerMiddleware, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import ToolAnnotations
 from pydantic import Field
 from sqlalchemy import select
 
@@ -123,6 +124,15 @@ async def _with_timeout[T](ctx: ToolContext, name: str, fn: Callable[[], Awaitab
         ) from None
 
 
+# MCP tool annotations: tell any MCP client what each tool can do. Nothing here can send,
+# post, buy or delete; save_note only writes to Scout's own notes table for this job.
+WEB_READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=True)
+DOCS_READ = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+NOTES_WRITE = ToolAnnotations(
+    read_only_hint=False, destructive_hint=False, idempotent_hint=False, open_world_hint=False
+)
+
+
 def build_server(ctx: ToolContext) -> MCPServer:
     server = MCPServer(
         "scout-tools",
@@ -135,11 +145,12 @@ def build_server(ctx: ToolContext) -> MCPServer:
     )
 
     @server.tool(
+        annotations=WEB_READ,
         description=(
             "Search the public web. Returns up to 5 results, each with a source_id, title, "
             "url and a short snippet. Snippets are previews: use fetch_url to read a page "
             "before relying on it."
-        )
+        ),
     )
     async def web_search(
         query: Annotated[
@@ -154,10 +165,11 @@ def build_server(ctx: ToolContext) -> MCPServer:
         return await _with_timeout(ctx, "web_search", lambda: impl.web_search(ctx, query))
 
     @server.tool(
+        annotations=WEB_READ,
         description=(
             "Read a web page or PDF and return its main text (up to 20,000 characters). "
             "Only public http/https addresses; internal addresses are refused."
-        )
+        ),
     )
     async def fetch_url(
         url: Annotated[
@@ -172,10 +184,11 @@ def build_server(ctx: ToolContext) -> MCPServer:
         return await _with_timeout(ctx, "fetch_url", lambda: impl.fetch_url(ctx, url))
 
     @server.tool(
+        annotations=DOCS_READ,
         description=(
             "Search the user's uploaded documents (PDFs). Returns the most relevant "
             "passages with source_id, document title and page number."
-        )
+        ),
     )
     async def rag_search(
         query: Annotated[
@@ -195,10 +208,11 @@ def build_server(ctx: ToolContext) -> MCPServer:
         )
 
     @server.tool(
+        annotations=NOTES_WRITE,
         description=(
             "Save one key fact for the report, tied to the source it came from. Keep each "
             "note to one or two sentences, in your own words."
-        )
+        ),
     )
     async def save_note(
         text: Annotated[str, Field(min_length=3, max_length=2000, description="The fact to save")],
