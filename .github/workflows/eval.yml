@@ -10,11 +10,11 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: "Only cases with all these tags, space-separated (empty = all 50)"
+        description: "ci (5 cases), all (50), or tags such as: web docs. Ignored when ids are set"
         default: "ci"
         required: false
       ids:
-        description: "Only these case ids, space-separated (optional)"
+        description: "Only these case ids, space-separated (optional; overrides tags)"
         default: ""
         required: false
       max_cost_gbp:
@@ -95,8 +95,13 @@ jobs:
           export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
 
           args=(--max-cost-gbp "$MAX_COST")
-          if [ -n "$TAGS" ]; then read -ra t <<< "$TAGS"; args+=(--tags "${t[@]}"); fi
-          if [ -n "$IDS" ]; then read -ra i <<< "$IDS"; args+=(--ids "${i[@]}"); fi
+          # GitHub swaps an empty input for its default, so "all" stands for no tag filter,
+          # and ids win over tags (otherwise tags=ci would quietly filter the ids too).
+          if [ -n "$IDS" ]; then
+            read -ra i <<< "$IDS"; args+=(--ids "${i[@]}")
+          elif [ -n "$TAGS" ] && [ "$TAGS" != "all" ]; then
+            read -ra t <<< "$TAGS"; args+=(--tags "${t[@]}")
+          fi
           python -m scout.eval run "${args[@]}"
 
       - name: Summary
