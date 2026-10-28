@@ -10,9 +10,10 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
 import anyio
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,9 +21,20 @@ from sqlalchemy.orm import Session
 from scout.api.deps import CurrentUser, DbSession
 from scout.jobs.queue import QueueUnavailableError
 from scout.jobs.runner import TERMINAL
-from scout.models import JobEvent, JobTrajectory, ResearchJob
+from scout.models import Feedback, JobEvent, JobTrajectory, ResearchJob
 from scout.safety.injection import scan
-from scout.schemas import JobCreatedOut, JobEventOut, JobOut, ResearchIn, TrajectoryOut
+from scout.schemas import (
+    DayCount,
+    FeedbackIn,
+    FeedbackOut,
+    JobCreatedOut,
+    JobEventOut,
+    JobOut,
+    JobSummaryOut,
+    ResearchIn,
+    StatsOut,
+    TrajectoryOut,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/research", tags=["research"])
@@ -115,6 +127,82 @@ def _fail_if_stale(db: Session, job: ResearchJob, stale_after_s: int) -> None:
         job.finished_at = datetime.now(UTC)
         db.add(JobEvent(job_id=job.id, node="job", message=job.error))
         db.commit()
+
+
+@router.get("", response_model=list[JobSummaryOut])
+def list_research(
+    user: CurrentUser,
+    db: DbSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    before: Annotated[
+        datetime | None, Query(description="created_at of the last item seen")
+    ] = None,
+) -> list[JobSummaryOut]:
+    """Your research jobs, newest first. Page with ?before=<created_at of the last item>."""
+    query = select(ResearchJob).where(ResearchJob.user_id == user.id)
+    if before is not None:
+        query = query.where(ResearchJob.created_at < before)
+    jobs = db.scalars(query.order_by(ResearchJob.created_at.desc()).limit(limit)).all()
+    ratings = dict(
+        db.execute(
+            select(Feedback.job_id, Feedback.rating).where(
+                Feedback.user_id == user.id, Feedback.job_id.in_([j.id for j in jobs])
+            )
+        ).all()
+    )
+    return [
+        JobSummaryOut(
+            id=j.id,
+            question=j.question,
+            status=j.status,
+            created_at=_aware(j.created_at),
+            finished_at=_aware(j.finished_at),
+            cost_gbp=j.cost_gbp,
+            rating=ratings.get(j.id),
+        )
+        for j in jobs
+    ]
+
+
+@router.get("/stats", response_model=StatsOut)
+def research_stats(
+    user: CurrentUser, db: DbSession, days: Annotated[int, Query(ge=1, le=90)] = 30
+) -> StatsOut:
+    """Your own numbers over the last `days`: reports per day, average cost and time,
+    failure rate, feedback. (Scout has no admin role, so stats are always per user.)"""
+    since = datetime.now(UTC) - timedelta(days=days)
+    jobs = db.scalars(
+        select(ResearchJob).where(ResearchJob.user_id == user.id, ResearchJob.created_at >= since)
+    ).all()
+    finished = [j for j in jobs if j.status in TERMINAL]
+    reported = [j for j in finished if j.report]
+    latencies = [j.report.get("latency_s") for j in reported if j.report.get("latency_s")]
+    per_day: dict[str, int] = {}
+    for j in reported:
+        day = _aware(j.created_at).date().isoformat()
+        per_day[day] = per_day.get(day, 0) + 1
+    by_status: dict[str, int] = {}
+    for j in jobs:
+        by_status[j.status] = by_status.get(j.status, 0) + 1
+    ratings = db.scalars(
+        select(Feedback.rating).where(
+            Feedback.user_id == user.id, Feedback.job_id.in_([j.id for j in jobs])
+        )
+    ).all()
+    return StatsOut(
+        days=days,
+        jobs=len(jobs),
+        finished=len(finished),
+        by_status=by_status,
+        reports_per_day=[DayCount(day=d, reports=n) for d, n in sorted(per_day.items())],
+        avg_cost_gbp=round(sum(j.cost_gbp for j in reported) / len(reported), 4)
+        if reported
+        else None,
+        avg_latency_s=round(sum(latencies) / len(latencies), 1) if latencies else None,
+        failure_rate=round(by_status.get("failed", 0) / len(finished), 3) if finished else None,
+        thumbs_up=ratings.count("up"),
+        thumbs_down=ratings.count("down"),
+    )
 
 
 @router.get("/{job_id}", response_model=JobOut)
@@ -241,3 +329,27 @@ def get_trajectory(
         sources=report.get("sources", []),
         claims=claims,
     )
+
+
+@router.post("/{job_id}/feedback", response_model=FeedbackOut)
+def give_feedback(
+    job_id: uuid.UUID, body: FeedbackIn, request: Request, user: CurrentUser, db: DbSession
+) -> FeedbackOut:
+    """Thumbs up/down on a finished report. Re-rating overwrites. Also sent to Langfuse as
+    a score on the run's trace (best effort; Scout's own table is the record)."""
+    job = _own_job(db, job_id, user.id)
+    if job.status not in TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Rate a report once it has finished")
+    row = db.scalar(select(Feedback).where(Feedback.job_id == job.id, Feedback.user_id == user.id))
+    if row is None:
+        row = Feedback(job_id=job.id, user_id=user.id, rating=body.rating, comment=body.comment)
+        db.add(row)
+    else:
+        row.rating, row.comment = body.rating, body.comment
+    db.commit()
+
+    send = request.app.state.send_score
+    trajectory = db.get(JobTrajectory, job.id)
+    if send is not None and trajectory is not None and trajectory.trace_id:
+        send(trajectory.trace_id, str(job.id), body.rating, body.comment)
+    return FeedbackOut(job_id=job.id, rating=body.rating, comment=body.comment)

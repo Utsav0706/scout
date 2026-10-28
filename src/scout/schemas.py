@@ -135,3 +135,50 @@ class TrajectoryOut(BaseModel):
     steps: list[dict]
     sources: list[dict]
     claims: list[dict]
+
+
+class JobSummaryOut(BaseModel):
+    id: uuid.UUID
+    question: str
+    status: str
+    created_at: datetime
+    finished_at: datetime | None
+    cost_gbp: float
+    rating: Literal["up", "down"] | None = None  # your feedback, if any
+
+
+class DayCount(BaseModel):
+    day: str  # YYYY-MM-DD (UTC)
+    reports: int
+
+
+class StatsOut(BaseModel):
+    days: int
+    jobs: int
+    finished: int
+    by_status: dict[str, int]
+    reports_per_day: list[DayCount]
+    avg_cost_gbp: float | None
+    avg_latency_s: float | None
+    failure_rate: float | None  # failed / finished
+    thumbs_up: int
+    thumbs_down: int
+
+
+class FeedbackIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rating: Literal["up", "down"]
+    comment: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("comment")
+    @classmethod
+    def clean_comment(cls, v: str | None) -> str | None:
+        v = " ".join(strip_hidden(v).split()) if v else None
+        return v or None
+
+
+class FeedbackOut(BaseModel):
+    job_id: uuid.UUID
+    rating: Literal["up", "down"]
+    comment: str | None

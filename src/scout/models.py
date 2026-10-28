@@ -175,3 +175,22 @@ class JobTrajectory(Base):
     trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     steps: Mapped[list] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Feedback(Base):
+    """A user's thumbs up/down on a report. One per user per job (changing your mind
+    overwrites it). Pitwall's improvement loop will read these later."""
+
+    __tablename__ = "feedback"
+    __table_args__ = (UniqueConstraint("job_id", "user_id", name="uq_feedback_job_user"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_jobs.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    rating: Mapped[str] = mapped_column(String(8))  # "up" | "down"
+    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

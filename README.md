@@ -7,7 +7,7 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M8 — MVP + tracing.** `POST /research` returns a job id
+Status: **M9a — web UI (ask + live progress + report).** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -118,6 +118,9 @@ Then open http://localhost:8000/docs for the interactive API docs.
 | `GET /research/{id}` | Status, progress events, and the report (JSON) when finished |
 | `GET /research/{id}/trajectory` | Every model and tool call of a finished run (inputs/outputs masked), plus sources and claims; for evaluation tools |
 | `GET /research/{id}/stream` | Server-sent events: `progress` per step, then `done`; resumes from `Last-Event-ID` |
+| `GET /research` | Your past jobs, newest first (`limit` 1–100, `before` for paging), with your rating |
+| `GET /research/stats` | Your last `days` (1–90): jobs, spend, average latency, support rate, thumbs up/down, jobs per day |
+| `POST /research/{id}/feedback` | `{rating: up\|down, comment?}` on a finished job; rating again replaces it. Also sent to Langfuse as a `user_feedback` score on that run's trace |
 
 Research jobs run on an **RQ worker** (Redis) in production. For local development on
 Windows, where RQ workers can't run, set `JOBS_MODE=inline` and the API runs jobs itself
@@ -128,6 +131,28 @@ Someone else's job id answers 404.
 set JOBS_MODE=inline
 uvicorn scout.api.main:create_app --factory
 ```
+
+## Web UI (Streamlit)
+
+A Streamlit app talks to the API over HTTP (it never touches the database), so it can
+run anywhere the API is reachable. Log in or create an account, ask a question, watch
+each step stream in, then read the report: every claim has a verdict badge and a
+**Sources** pop-up with the link and the exact words the verifier matched.
+
+Model-written text is escaped before display: no links, HTML or formatting from a model
+or a web page reach the screen, and prices like "$5" don't turn into maths.
+
+Local development on Windows, no Docker needed (two terminals):
+
+```bash
+pip install -e ".[dev]"
+py scripts/dev_api.py
+py scripts/dev_ui.py
+```
+
+`dev_api.py` runs the API on http://localhost:8001 with `JOBS_MODE=inline` and a local
+SQLite file (`scout_dev.db`; document search needs Postgres). `dev_ui.py` opens the UI on
+http://localhost:8501. Point the UI at another API with `SCOUT_API_URL`.
 
 The first upload or search downloads two small local models (~200 MB total) from
 Hugging Face; after that they are cached.
@@ -263,6 +288,9 @@ pytest
 | `src/scout/` | The package. |
 | `src/scout/rag/` | PDF ingest, chunking, embeddings, hybrid search. |
 | `src/scout/tools/` | MCP server and the four tools. |
+| `src/scout/ui/` | `ScoutClient` (HTTP client for the API) and the Streamlit pages. |
+| `ui/app.py` | Streamlit entry point. |
+| `scripts/` | Dev launchers, compose smoke test, red-team run. |
 | `prompts/` | Versioned prompt files (from M4). |
 | `docs/` | Design notes. |
 | `tests/` | pytest suite, run in CI on every push/PR. |

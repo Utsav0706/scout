@@ -39,7 +39,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Streamlit UI (ui/app.py). Separate so the API/worker image stays lean.
+ui = [
+    "streamlit>=1.40",
+]
 dev = [
+    "streamlit>=1.40",  # UI tests (AppTest)
     "pytest>=8.3",
     "ruff>=0.8",
     "httpx2>=2.13",

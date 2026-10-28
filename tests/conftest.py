@@ -5,6 +5,10 @@ from pathlib import Path
 import fakeredis
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -13,6 +17,7 @@ from scout.config import Secrets, load_config
 from scout.db import Base, init_db, make_engine
 from scout.jobs import worker
 from scout.jobs.queue import RQQueue
+from scout.telemetry import make_provider
 from tests.fakes import FakeEmbedder, FakeReranker
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -82,3 +87,17 @@ def db_factory(tmp_path: Path) -> Iterator[sessionmaker[Session]]:
     yield sessionmaker(engine, expire_on_commit=False)
     Base.metadata.drop_all(engine)
     engine.dispose()
+
+
+_EXPORTER = InMemorySpanExporter()
+
+
+@pytest.fixture
+def spans():
+    """In-memory span capture. OTel allows one global provider per process, so it's
+    installed once and cleared before each test."""
+    if not isinstance(trace.get_tracer_provider(), TracerProvider):
+        trace.set_tracer_provider(make_provider(_EXPORTER, SimpleSpanProcessor))
+    _EXPORTER.clear()
+    yield _EXPORTER
+    _EXPORTER.clear()

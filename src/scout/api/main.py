@@ -26,6 +26,7 @@ from scout.api import routes_auth, routes_documents, routes_research
 from scout.auth import require_jwt_secret
 from scout.config import AppConfig, Secrets, get_config, get_secrets
 from scout.db import db_is_up, init_db, make_engine
+from scout.feedback_scores import ScoreSender, langfuse_score_sender
 from scout.jobs.queue import InlineQueue, JobQueue, RQQueue
 from scout.llm.client import LLMClient
 from scout.log import setup_logging
@@ -61,6 +62,7 @@ def create_app(
     llm: LLMClient | None = None,
     queue_factory: QueueFactory | None = None,
     http_transport: httpx.AsyncBaseTransport | None = None,
+    score_sender: ScoreSender | None = None,
 ) -> FastAPI:
     """Tests pass fakes (models, LLM, queue, web); production builds the real ones."""
     secrets = secrets or get_secrets()
@@ -82,6 +84,8 @@ def create_app(
     app = FastAPI(title="Scout", version=__version__, lifespan=lifespan)
     app.state.config = config
     app.state.jwt_secret = jwt_secret
+    # Feedback -> Langfuse score (None without Langfuse keys); tests inject a fake.
+    app.state.send_score = score_sender or langfuse_score_sender(secrets)
     app.state.engine = engine
     app.state.session_factory = sessionmaker(engine, expire_on_commit=False)
     # Real models load lazily on first use; tests pass small fakes instead.

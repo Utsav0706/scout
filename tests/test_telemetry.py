@@ -10,29 +10,14 @@ from pathlib import Path
 
 import pytest
 from opentelemetry import trace
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import SecretStr
 
 from scout.config import Secrets
-from scout.telemetry import langfuse_exporter, langfuse_settings, make_provider
+from scout.telemetry import langfuse_exporter, langfuse_settings
 from tests.conftest import auth_headers
 from tests.test_agent import run
 from tests.test_tools import CONFIG
-
-_EXPORTER = InMemorySpanExporter()
-
-
-@pytest.fixture
-def spans():
-    """In-memory span capture. OTel allows one global provider per process, so it's
-    installed once and cleared before each test."""
-    if not isinstance(trace.get_tracer_provider(), TracerProvider):
-        trace.set_tracer_provider(make_provider(_EXPORTER, SimpleSpanProcessor))
-    _EXPORTER.clear()
-    yield _EXPORTER
-    _EXPORTER.clear()
 
 
 def by_name(exporter: InMemorySpanExporter) -> dict[str, list]:
