@@ -1,0 +1,42 @@
+Quillmere Robotics Ltd - Incident Report IR-2025-017
+Title: Warehouse robot fleet stoppage at the Daventry fulfilment site
+Date of incident: 14 July 2025. Severity: SEV-1. Status: closed.
+Incident commander: Hana Lindqvist. Report author: Tomas Reyes.
+FICTIONAL DOCUMENT created for the Scout evaluation set. Quillmere Robotics is not a real company.
+
+1. Summary
+At 06:18 BST all 64 AX-7 picking robots at the Daventry site stopped at once and stayed stopped. Picking resumed in stages and full service returned at 10:00 BST. The total outage lasted 3 hours 42 minutes.
+
+2. Impact
+- 64 AX-7 robots stopped (the whole Daventry fleet).
+- About 11,200 customer orders were delayed by at least half a day.
+- Two customers had their service level agreements breached: Brindle Foods and Orrin Pharma.
+- Quillmere paid service credits totalling GBP 18,500 to affected customers.
+- No one was injured and no stock was damaged.
+
+3. Timeline (all times BST)
+05:55 Fleet controller "Conductor" automatically updated from version 5.2.4 to version 5.3.0.
+06:18 All robots triggered an emergency stop within 4 seconds of each other.
+06:31 Warehouse floor staff reported the stoppage to the operations desk. Monitoring raised no alert. The stoppage was therefore detected 13 minutes after it began.
+06:45 Incident declared SEV-1; Hana Lindqvist took command.
+08:10 Engineers linked the stoppage to the Conductor update.
+09:40 Conductor rolled back to version 5.2.4.
+09:40-10:00 Robots restarted in batches of 8 so each batch could pass safety checks.
+10:00 Full service restored.
+---page---
+4. Root cause
+Conductor version 5.3.0 changed the interval between heartbeat messages sent to each robot from 2 seconds to 20 seconds, as part of an effort to reduce network traffic.
+Every AX-7 runs a safety watchdog that triggers an emergency stop if it receives no heartbeat for 5 seconds. With heartbeats now 20 seconds apart, every robot's watchdog fired and the whole fleet stopped.
+The change passed all existing tests because no test compared the controller's heartbeat interval with the robots' watchdog timeout.
+
+5. Why detection was slow
+Our monitoring checked that the Conductor service was running, which it was. It did not alert on robots entering emergency stop.
+
+6. Actions
+A1. Add a contract test that fails if the heartbeat interval is not well below the robot watchdog timeout. Owner: Tomas Reyes. Due: 31 August 2025. Status: done.
+A2. Roll out Conductor updates to 10 percent of a site's fleet first, and wait 30 minutes before the rest. Owner: Hana Lindqvist. Due: 15 September 2025. Status: done.
+A3. Page the on-call engineer when more than 5 robots enter emergency stop within 1 minute. Owner: Site Reliability team. Due: 31 July 2025. Status: done.
+A4. Stop automatic controller updates during picking hours (05:00-22:00). Owner: Operations. Status: done.
+
+7. Lessons
+Two safe settings can be unsafe together. Safety-related timing values must be tested as a pair.

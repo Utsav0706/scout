@@ -1,0 +1,393 @@
+# Scout golden set: 50 questions with the key points a correct report covers.
+#
+# Format (shared with Dyno): id, input, expected, must_call, must_not_call, max_steps, tags.
+# Categories (exactly one tag each):
+#   web           answer is on the public web; facts chosen to be stable over years
+#   docs          answer is only in the made-up company files in eval/corpus/
+#   both          needs one fact from the files and one from the web
+#   unanswerable  the right report says there isn't enough evidence (expected is empty)
+# Extra tag "ci": the small subset run in CI.
+#
+# Status: DRAFT, needs a human review of every expected key point before the baseline run.
+
+cases:
+  # --- web (20) ---
+
+  - id: web-minimum-wage-start
+    input: When did the UK National Minimum Wage come into force, and what was the main adult hourly rate at the start?
+    expected:
+      - It came into force on 1 April 1999.
+      - The main adult rate was GBP 3.60 an hour (for workers aged 22 and over).
+    must_call: [web_search]
+    tags: [web, ci]
+
+  - id: web-boe-independence
+    input: When did the Bank of England get operational independence to set interest rates, and which law made it formal?
+    expected:
+      - It was announced by the new government in May 1997.
+      - The Bank of England Act 1998 put it into law.
+      - Rates are set by the Monetary Policy Committee.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-climate-change-act
+    input: What emissions target did the UK Climate Change Act 2008 originally set, and how was it changed in 2019?
+    expected:
+      - The original target was at least an 80% cut in greenhouse gas emissions by 2050 compared with 1990.
+      - In 2019 it was amended to net zero (a 100% cut) by 2050.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-nhs-founding
+    input: When was the NHS founded, and which minister led its creation?
+    expected:
+      - The NHS was launched on 5 July 1948.
+      - Aneurin (Nye) Bevan, the Minister of Health, led its creation.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-speed-of-light
+    input: What is the speed of light in a vacuum, and why is its value exact?
+    expected:
+      - It is 299,792,458 metres per second.
+      - It is exact because since 1983 the metre has been defined using the speed of light.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-brexit-dates
+    input: On what date did the UK leave the EU, and when did the transition period end?
+    expected:
+      - The UK left the EU on 31 January 2020.
+      - The transition period ended on 31 December 2020.
+    must_call: [web_search]
+    tags: [web, ci]
+
+  - id: web-eu-referendum-result
+    input: What was the result of the 2016 UK referendum on EU membership, including turnout?
+    expected:
+      - It was held on 23 June 2016.
+      - Leave won about 51.9% to Remain's 48.1%.
+      - Turnout was about 72%.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-bletchley-declaration
+    input: What is the Bletchley Declaration on AI?
+    expected:
+      - It was agreed at the AI Safety Summit at Bletchley Park in November 2023.
+      - It was signed by 28 countries and the EU.
+      - It concerns the risks and safe development of frontier AI.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-gdpr-article-17
+    input: What right does Article 17 of the GDPR give people?
+    expected:
+      - The right to erasure, also called the right to be forgotten.
+      - People can ask for their personal data to be deleted when certain grounds apply.
+      - There are exceptions, such as freedom of expression or legal obligations.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-transformer-paper
+    input: Which paper introduced the transformer architecture, and when?
+    expected:
+      - The paper was "Attention Is All You Need".
+      - It was published in 2017 by researchers at Google (Vaswani et al.).
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-equality-act
+    input: How many protected characteristics does the UK Equality Act 2010 list, and what did the Act replace?
+    expected:
+      - It lists nine protected characteristics.
+      - It brought together and replaced earlier anti-discrimination laws (such as the Sex Discrimination Act 1975, Race Relations Act 1976 and Disability Discrimination Act 1995).
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-london-underground-opening
+    input: When did the London Underground first open, and between which stations?
+    expected:
+      - It opened on 10 January 1863.
+      - The Metropolitan Railway ran between Paddington and Farringdon.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-boe-inflation-target
+    input: What inflation target does the Bank of England work to, and which price index is it measured on?
+    expected:
+      - The target is 2%.
+      - It is measured on the Consumer Prices Index (CPI).
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-decimal-day
+    input: When did the UK switch to decimal currency, and what changed?
+    expected:
+      - Decimal Day was 15 February 1971.
+      - The pound was divided into 100 new pence instead of 240 old pence (20 shillings of 12 pence).
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-ben-nevis-height
+    input: How tall is Ben Nevis?
+    expected:
+      - Ben Nevis is 1,345 metres high (about 4,413 feet).
+      - It is the highest mountain in the UK.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-penicillin-discovery
+    input: Who discovered penicillin, when, and where?
+    expected:
+      - Alexander Fleming discovered it.
+      - In 1928.
+      - At St Mary's Hospital in London.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-human-rights-act
+    input: When did the UK Human Rights Act 1998 come into force, and what does it do?
+    expected:
+      - It came into force on 2 October 2000.
+      - It brings the rights in the European Convention on Human Rights into UK law.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-turing-test-paper
+    input: In which paper did Alan Turing propose what became known as the Turing test?
+    expected:
+      - The paper was "Computing Machinery and Intelligence".
+      - It was published in 1950 in the journal Mind.
+      - Turing called the test the imitation game.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-online-safety-act
+    input: When did the UK Online Safety Act become law, and who regulates it?
+    expected:
+      - It received Royal Assent on 26 October 2023.
+      - Ofcom is the regulator.
+    must_call: [web_search]
+    tags: [web]
+
+  - id: web-gold-standard-exit
+    input: When did the UK leave the gold standard?
+    expected:
+      - The UK suspended the gold standard on 21 September 1931.
+    must_call: [web_search]
+    tags: [web]
+
+  # --- docs (12): made-up company files in eval/corpus/ ---
+
+  - id: docs-london-hotel-cap
+    input: According to my documents, what is the most Quillmere will reimburse for a hotel night in London?
+    expected:
+      - GBP 190 per night, excluding breakfast.
+    must_call: [rag_search]
+    tags: [docs, ci]
+
+  - id: docs-claim-deadlines
+    input: How long do Quillmere employees have to submit an expense claim?
+    expected:
+      - Claims must be submitted within 30 days, through the Ledgerline system.
+      - Claims more than 90 days old are rejected.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-first-class-rail
+    input: When does Quillmere's travel policy allow first-class rail travel?
+    expected:
+      - Only for single journeys scheduled to take more than 3 hours.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-trip-approval
+    input: Which Quillmere trips need approval before booking, and from whom?
+    expected:
+      - Trips expected to cost more than GBP 1,500 need the line manager and Finance to approve.
+      - All international trips also need a Director's approval.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-incident-impact
+    input: How long did the Daventry robot outage in my incident report last, and how many robots stopped?
+    expected:
+      - It lasted 3 hours 42 minutes (06:18 to 10:00 BST on 14 July 2025).
+      - All 64 AX-7 robots at the site stopped.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-incident-root-cause
+    input: What caused Quillmere's July 2025 warehouse fleet stoppage?
+    expected:
+      - Conductor version 5.3.0 changed the heartbeat interval from 2 seconds to 20 seconds.
+      - The robots' safety watchdog stops them after 5 seconds without a heartbeat, so every robot emergency-stopped.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-incident-detection
+    input: How was the Daventry incident detected, and how long after it began?
+    expected:
+      - Warehouse floor staff reported it, not the monitoring.
+      - It was detected at 06:31, 13 minutes after it began.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-incident-customers
+    input: Which customers had SLA breaches in incident IR-2025-017, and how much did Quillmere pay in credits?
+    expected:
+      - Brindle Foods and Orrin Pharma.
+      - Service credits totalled GBP 18,500.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-ax7-handling
+    input: What is the AX-7's maximum payload and shelf reach?
+    expected:
+      - Maximum payload 35 kg.
+      - Maximum shelf reach 2.4 m.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-ax7-battery
+    input: How long does an AX-7 run on one charge, and how fast does it charge?
+    expected:
+      - About 9 hours typical runtime.
+      - 0 to 80 percent in 55 minutes at a Quillmere dock.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-ax7-price
+    input: What does an AX-7 cost, including the fleet software?
+    expected:
+      - List price GBP 41,500 per robot (UK, excluding VAT).
+      - Conductor fleet software licence GBP 2,100 per robot per year.
+    must_call: [rag_search]
+    tags: [docs]
+
+  - id: docs-leeds-site
+    input: What did the Quillmere board decide about a new site in October 2025?
+    expected:
+      - A new assembly and service site in Leeds was approved.
+      - Capital budget GBP 6.8 million.
+      - Planned to open in the third quarter of 2026, with about 60 staff.
+    must_call: [rag_search]
+    tags: [docs]
+
+  # --- both (10): one fact from the files, one from the web ---
+
+  - id: both-ax7-battery-voltage
+    input: What battery chemistry does the AX-7 use, and what is the nominal voltage of one cell of that chemistry?
+    expected:
+      - The AX-7 uses a lithium iron phosphate (LiFePO4) battery.
+      - A LiFePO4 cell has a nominal voltage of about 3.2 volts.
+    must_call: [rag_search, web_search]
+    tags: [both, ci]
+
+  - id: both-iso-3691-4
+    input: Which safety standard is the AX-7 certified to, and what does that standard cover?
+    expected:
+      - The AX-7 is certified to ISO 3691-4.
+      - ISO 3691-4 sets safety requirements for driverless industrial trucks (automated guided and autonomous mobile vehicles) and their systems.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-mileage-vs-hmrc
+    input: Does Quillmere's private car mileage rate match HMRC's approved mileage allowance for cars?
+    expected:
+      - Quillmere pays 45p per mile for the first 10,000 business miles and 25p after that.
+      - HMRC's approved rates for cars are also 45p for the first 10,000 miles and 25p after, so they match.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-daventry-county
+    input: In which English county is the site of Quillmere's July 2025 robot outage?
+    expected:
+      - The outage was at the Daventry fulfilment site.
+      - Daventry is in Northamptonshire (West Northamptonshire).
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-ax7-ip-rating
+    input: What IP rating does the AX-7 have, and what protection does that rating mean?
+    expected:
+      - The AX-7 is rated IP54.
+      - 5 means protected against dust (limited ingress, no harmful deposits).
+      - 4 means protected against splashing water from any direction.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-singapore-cabin-class
+    input: Under Quillmere's travel policy, which cabin class can an employee book for a direct London to Singapore flight?
+    expected:
+      - The policy allows premium economy for flights over 6 hours (economy for 6 hours or less).
+      - A direct London to Singapore flight takes about 13 hours, so premium economy is allowed.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-ax7-speed-vs-walking
+    input: How does the AX-7's speed limit in areas shared with people compare with a typical human walking speed?
+    expected:
+      - The AX-7 is limited to 1.2 m/s where people work.
+      - Typical walking speed is about 1.3 to 1.4 m/s (about 5 km/h), so the robot is slightly slower than walking pace.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-company-size
+    input: Based on Quillmere's latest figures, would it count as a small company under the UK Companies Act size thresholds?
+    expected:
+      - Quillmere forecasts GBP 23.4 million revenue for 2025 and had 212 staff.
+      - The small company limits are a turnover of up to GBP 15 million (since April 2025) and up to 50 employees, so Quillmere is not small; it is medium-sized.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-leeds-population
+    input: Quillmere approved a new site in a northern city. What was that city's population in the 2021 census?
+    expected:
+      - The new site is in Leeds.
+      - The Leeds local authority area had about 812,000 residents in the 2021 census.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  - id: both-coventry-river
+    input: The AX-7 is assembled in which city, and which river flows through that city?
+    expected:
+      - It is assembled in Coventry.
+      - The River Sherbourne flows through Coventry.
+    must_call: [rag_search, web_search]
+    tags: [both]
+
+  # --- unanswerable (8): the right report says there isn't enough evidence ---
+
+  - id: none-quillmere-2021-revenue
+    input: What was Quillmere Robotics' revenue in 2021?
+    tags: [unanswerable, ci]
+
+  - id: none-january-2026-minutes
+    input: What did the Quillmere board decide about the Leeds site at its January 2026 meeting?
+    tags: [unanswerable]
+
+  - id: none-ax7-ramp-payload
+    input: What is the AX-7's maximum payload when driving up a 10-degree ramp?
+    tags: [unanswerable]
+
+  - id: none-march-2024-incident
+    input: Who was the incident commander for Quillmere's March 2024 data-centre outage?
+    tags: [unanswerable]
+
+  - id: none-future-base-rate
+    input: What will the Bank of England base rate be on 1 January 2031?
+    tags: [unanswerable]
+
+  - id: none-future-wimbledon
+    input: Who won the men's singles title at Wimbledon in 2029?
+    tags: [unanswerable]
+
+  - id: none-fictional-company-revenue
+    input: What was the 2022 annual revenue of Threnwick Quantasys Ltd, the Norwich photonics firm?
+    tags: [unanswerable]
+
+  - id: none-ax7-japan-price
+    input: What is the official list price of the AX-7 in Japan, in yen?
+    tags: [unanswerable]

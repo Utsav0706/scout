@@ -7,7 +7,7 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M9 — web UI.** `POST /research` returns a job id
+Status: **M10a — golden-set eval built; baseline numbers pending.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -197,6 +197,43 @@ call (137 observations for 62 calls) and doubled the cost Langfuse showed. Now o
 observation per call, and Langfuse's cost matches Scout's to the penny (about 77 units a
 run; the free tier covers ~650 runs a month).
 
+## Evaluation (golden set)
+
+`eval/golden.yaml` holds 50 questions with the key points a correct report must cover:
+
+| Category | Cases | What it tests |
+|---|---|---|
+| web | 20 | Stable public facts (laws, dates, science) |
+| docs | 12 | Facts only in `eval/corpus/`: made-up company files, so the web can't answer them |
+| both | 10 | One fact from the files plus one from the web |
+| unanswerable | 8 | The right report says the evidence isn't there, without inventing an answer |
+
+Five cases tagged `ci` make a small subset. The format (`id, input, expected, must_call,
+must_not_call, max_steps, tags`) matches Dyno's, so Dyno can load the same file.
+
+| Metric | How it's measured |
+|---|---|
+| Task success | A judge model checks every key point is in the report (or, for unanswerable cases, that it says so and doesn't make up an answer). The pass rule is in code. |
+| Tool selection | The run called the tools the case needs (`must_call`) and none it mustn't |
+| Claim support | Share of claims in the final report the verifier marked supported, and first-check rate |
+| Citation accuracy | A judge re-checks up to 8 claims per report against their verified quotes. Sonnet judges, Haiku verifies, so it's not the verifier marking its own work. |
+| Steps, cost, latency | From each report; latency as p50 and p95 |
+
+The judge prompts are versioned like the agent's (`prompts/judge_task_v1.md`,
+`prompts/judge_citation_v1.md`). Every case gets every tool, because choosing them is part of the test.
+
+```bash
+py -m scout.eval run --tags ci                        # 5 cases, about £0.25
+py -m scout.eval run                                  # all 50, about £2.60
+py -m scout.eval run --tags web --database-url sqlite:///scout_eval.db   # no Postgres
+```
+
+This **costs money**: it runs the real agent and judges. It stops starting new cases at
+`--max-cost-gbp` (default £5). Results go to `runs/eval/<time>/` (`results.jsonl` with
+each case's Langfuse trace id, `summary.json`, `summary.md`). `--min-task-success 0.8`
+exits 1 below that, which is the eval gate for the deploy pipeline. Docs cases need
+Postgres + pgvector; on SQLite they're skipped.
+
 ## Safety: outside text is data, never instructions
 
 Web pages, search snippets and uploaded PDFs can contain text aimed at the AI ("ignore
@@ -305,5 +342,7 @@ pytest
 | `scripts/` | Dev launchers, compose smoke test, red-team run. |
 | `Dockerfile`, `Dockerfile.ui` | API/worker image; lean UI image. |
 | `prompts/` | Versioned prompt files (from M4). |
+| `src/scout/eval/` | Golden-set eval: cases, corpus, scorers, judges, runner. |
+| `eval/` | `golden.yaml` (50 cases) and `corpus/` (made-up company files). |
 | `docs/` | Design notes. |
 | `tests/` | pytest suite, run in CI on every push/PR. |

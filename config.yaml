@@ -46,6 +46,13 @@ llm:
       effort: medium
       max_tokens: 8000
       fallback: true
+    # Eval only (py -m scout.eval): grades reports. A different model from the Haiku
+    # verifier, so citation checks are not the verifier marking its own work.
+    judge:
+      model: claude-sonnet-5-5
+      task_type: verify
+      effort: medium
+      max_tokens: 4000
 
 # USD per million tokens (Anthropic first-party API, checked 2026-10-22).
 # Thinking tokens are billed as output. Cache rows are used only once prompt caching is on.

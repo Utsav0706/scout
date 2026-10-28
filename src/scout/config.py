@@ -15,7 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Agent nodes that call an LLM. The finaliser only formats output, so it has no model.
-NodeName = Literal["planner", "researcher", "reader", "writer", "verifier", "reviser"]
+# "judge" is not an agent node: the golden-set eval (scout.eval) grades reports with it.
+NodeName = Literal["planner", "researcher", "reader", "writer", "verifier", "reviser", "judge"]
 # Tag sent with every LLM request so Gearbox can route on it later.
 TaskType = Literal["plan", "extract", "write", "verify"]
 

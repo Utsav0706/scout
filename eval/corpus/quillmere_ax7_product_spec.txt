@@ -1,0 +1,41 @@
+Quillmere Robotics Ltd - AX-7 Autonomous Picking Robot - Product Specification
+Revision C, January 2025. Product manager: Elif Durmaz.
+FICTIONAL DOCUMENT created for the Scout evaluation set. Quillmere Robotics is not a real company.
+
+1. Overview
+The AX-7 is an autonomous mobile robot that picks items from warehouse shelving and carries them to packing stations. It went on general sale in April 2025. Every AX-7 is assembled at Quillmere's plant in Coventry, England.
+
+2. Handling
+- Maximum payload: 35 kg.
+- Maximum shelf reach (height of the highest pick point): 2.4 m.
+- Gripper: dual vacuum and two-finger mechanical gripper, changed automatically.
+
+3. Movement and navigation
+- Maximum speed: 2.0 m/s in robot-only zones.
+- Speed limit in zones shared with people: 1.2 m/s.
+- Navigation: 360-degree LiDAR plus ceiling-mounted fiducial markers.
+- Positioning accuracy: plus or minus 10 mm.
+
+4. Power
+- Battery: 48 V lithium iron phosphate (LiFePO4) pack, 2.4 kWh capacity.
+- Typical runtime: 9 hours per charge.
+- Fast charging: 0 to 80 percent in 55 minutes at a Quillmere charging dock.
+- Battery warranty: at least 70 percent of original capacity after 3,000 charge cycles.
+---page---
+5. Safety
+- Certified to ISO 3691-4.
+- Performance level PL d for personnel detection and stopping.
+- Safety watchdog: the robot stops if it receives no heartbeat from the fleet controller for 5 seconds.
+- Physical emergency stop buttons on all four sides.
+
+6. Physical
+- Weight: 182 kg including battery.
+- Footprint: 780 mm x 620 mm.
+- Ingress protection: IP54.
+- Operating temperature: 0 to 40 degrees Celsius.
+
+7. Commercial
+- List price: GBP 41,500 per robot (UK, excluding VAT).
+- Fleet software licence (Conductor): GBP 2,100 per robot per year.
+- Warranty: 3 years parts and labour.
+- Minimum order: 10 robots for a new site.
