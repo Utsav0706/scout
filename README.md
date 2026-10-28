@@ -4,10 +4,13 @@ An autonomous research agent. Ask a question; Scout plans the research, searches
 web and a private document store, reads sources, verifies every claim, and returns a
 report where each claim links to its source.
 
-> Headline (filled in once measured): *"Scout answers research questions with X% of
-> claims verified against sources, in Y seconds, for £Z per report."*
+> **Scout answers research questions in 30 s (median) for £0.024 per report.** On a
+> 50-question golden set it fully answers 68%, says "not enough evidence" instead of
+> inventing an answer on 8/8 trick questions, and every claim it keeps passes its own
+> verifier; an independent judge agrees with 66% of sampled citations.
+> ([baseline](eval/results/baseline-2026-10-28/summary.md), 28 Oct 2026)
 
-Status: **M10a — golden-set eval built; baseline numbers pending.** `POST /research` returns a job id
+Status: **M10 — golden-set eval with baseline numbers.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -223,8 +226,8 @@ The judge prompts are versioned like the agent's (`prompts/judge_task_v1.md`,
 `prompts/judge_citation_v1.md`). Every case gets every tool, because choosing them is part of the test.
 
 ```bash
-py -m scout.eval run --tags ci                        # 5 cases, about £0.25
-py -m scout.eval run                                  # all 50, about £2.60
+py -m scout.eval run --tags ci                        # 5 cases, about £0.17
+py -m scout.eval run                                  # all 50, about £1.65
 py -m scout.eval run --tags web --database-url sqlite:///scout_eval.db   # no Postgres
 ```
 
@@ -233,6 +236,47 @@ This **costs money**: it runs the real agent and judges. It stops starting new c
 each case's Langfuse trace id, `summary.json`, `summary.md`). `--min-task-success 0.8`
 exits 1 below that, which is the eval gate for the deploy pipeline. Docs cases need
 Postgres + pgvector; on SQLite they're skipped.
+
+On GitHub: **Actions → eval → Run workflow**. Set `tags` to `ci` or `all`, or list `ids`. It needs the
+`ANTHROPIC_API_KEY` and `TAVILY_API_KEY` repo secrets; results show on the run's summary page.
+
+### Baseline results (28 Oct 2026, commit `1ee463a`)
+
+All 50 cases ran on real models (GitHub Actions, Postgres + pgvector). Spend £1.63:
+£1.18 research plus £0.45 judges.
+
+| Metric | Overall | web | docs | both | unanswerable |
+|---|---|---|---|---|---|
+| Task success (judge) | **68%** | 65% | **100%** | **10%** | **100%** |
+| Key-point coverage | 81% | 81% | 100% | 57% | – |
+| Tool selection | 100% | 100% | 100% | 100% | 100% |
+| Claim support, final report | 100% | 100% | 100% | 100% | 100% |
+| Claim support, first check | 87% | 88% | 94% | 78% | 83% |
+| Citation accuracy (independent judge) | 66% | 74% | 76% | 54% | 45% |
+| Avg cost per report | £0.024 | £0.028 | £0.017 | £0.023 | £0.024 |
+| Latency p50 / p95 | 30 s / 49 s | 39 / 54 s | 24 / 26 s | 27 / 45 s | 31 / 42 s |
+
+What it shows:
+- **Strong:**
+  - Document questions (12/12).
+  - Refusing to invent answers (8/8 unanswerable questions).
+  - Picking the right tools (50/50).
+- **Weakest: questions needing both sources (1/10).** Scout finds the document fact,
+  then misses the web half and says so, instead of guessing. 11 of the 16 failures
+  overall are "couldn't find it", not wrong answers.
+- **Verifier vs independent judge.** The reviser removes or rewrites claims that fail
+  verification, so every kept claim passes Scout's own verifier. Yet an independent
+  judge (Sonnet, checking claim against quote) agrees with only 66% of sampled
+  citations. Either the verifier is too lenient or the judge too strict. Settling
+  that needs human-labelled examples, which is Dyno's calibration step.
+- **Strict key points.** 4 failures miss a key point the question didn't strictly ask
+  for (e.g. "at Google" for the transformer paper).
+- **One answer key was wrong.** HMRC raised its mileage rate to 55p in 2026-27. Scout
+  reported this correctly and the key had the old 45p. The key is fixed; the
+  baseline is left as it ran (graded against the fixed key, it would be 35/50, 70%).
+
+These are the "before" numbers. Fixing the failures (starting with "both"
+questions) is left for Dyno, so the before/after comparison is measured.
 
 ## Safety: outside text is data, never instructions
 

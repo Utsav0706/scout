@@ -8,7 +8,8 @@
 #   unanswerable  the right report says there isn't enough evidence (expected is empty)
 # Extra tag "ci": the small subset run in CI.
 #
-# Status: DRAFT, needs a human review of every expected key point before the baseline run.
+# Status: reviewed 2026-10-28. Correction after the baseline: both-mileage-vs-hmrc (HMRC's
+# rate rose to 55p in 2026-27; the report was right, the key was out of date).
 
 cases:
   # --- web (20) ---
@@ -297,7 +298,7 @@ cases:
     input: Does Quillmere's private car mileage rate match HMRC's approved mileage allowance for cars?
     expected:
       - Quillmere pays 45p per mile for the first 10,000 business miles and 25p after that.
-      - HMRC's approved rates for cars are also 45p for the first 10,000 miles and 25p after, so they match.
+      - From the 2026-27 tax year HMRC's approved rate for cars is 55p for the first 10,000 miles (25p after), so Quillmere's 45p is below it; they matched until 2025-26.
     must_call: [rag_search, web_search]
     tags: [both]
 
