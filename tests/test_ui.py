@@ -50,6 +50,7 @@ def test_full_flow_through_the_client(scout: ScoutClient) -> None:
     assert job["report"]["verification"]["supported"] == 2
     assert scout.history()[0]["id"] == job_id
     assert scout.feedback(job_id, "up")["rating"] == "up"
+    assert scout.job(job_id)["feedback"] == {"job_id": job_id, "rating": "up", "comment": None}
     assert scout.history()[0]["rating"] == "up"
     assert scout.stats()["thumbs_up"] == 1
 
@@ -120,3 +121,94 @@ def test_report_page_shows_claims_badges_sources_and_cost(scout: ScoutClient) ->
     assert "example.com" in text  # source links inside the citation pop-ups
     assert "Official statistics page about" in text  # the verifier's quote
     assert any("£" in c.value and "claims supported" in c.value for c in at.caption)
+
+
+def finished_job(scout: ScoutClient) -> str:
+    job_id = scout.start_research(QUESTION["question"], use_docs=False)
+    list(scout.stream(job_id))  # wait for it to finish
+    return job_id
+
+
+def app(scout: ScoutClient, **state) -> AppTest:
+    at = AppTest.from_file(APP, default_timeout=10)
+    at.session_state["client"] = scout
+    for key, value in state.items():
+        at.session_state[key] = value
+    return at.run()
+
+
+def test_feedback_form_saves_rating_and_comment(scout: ScoutClient) -> None:
+    job_id = finished_job(scout)
+    at = app(scout, job_id=job_id)
+    assert at.feedback[0].value is None
+
+    at.feedback[0].set_value(0)
+    at.text_input(key=f"comment-{job_id}").set_value("Missed the 2025 figures")
+    at.button(key=f"FormSubmitter:feedback-{job_id}-Send feedback").click().run()
+    assert not at.exception
+    assert at.success[0].value == "Thanks, feedback saved."
+    assert scout.job(job_id)["feedback"]["rating"] == "down"
+    assert scout.job(job_id)["feedback"]["comment"] == "Missed the 2025 figures"
+
+    again = app(scout, job_id=job_id)  # reopening the report shows the saved rating
+    assert again.feedback[0].value == 0
+
+
+def test_feedback_needs_a_rating(scout: ScoutClient) -> None:
+    job_id = finished_job(scout)
+    at = app(scout, job_id=job_id)
+    at.button(key=f"FormSubmitter:feedback-{job_id}-Send feedback").click().run()
+    assert at.warning[0].value == "Pick 👍 or 👎 first."
+    assert scout.job(job_id)["feedback"] is None
+
+
+def test_history_lists_jobs_and_opens_one(scout: ScoutClient) -> None:
+    job_id = finished_job(scout)
+    scout.feedback(job_id, "up")
+    at = app(scout, page="History")
+    assert not at.exception
+    assert any(QUESTION["question"][:20] in m.value for m in at.markdown)
+    assert any("complete" in c.value and "👍" in c.value for c in at.caption)
+
+    at.button(key=f"open-{job_id}").click().run()
+    assert at.session_state["page"] == "Ask"
+    assert any("UK inflation rose." in m.value for m in at.markdown)  # the report
+
+
+def test_history_pages_through_older_jobs(scout: ScoutClient, monkeypatch) -> None:
+    from scout.ui import views
+
+    monkeypatch.setattr(views, "PAGE_SIZE", 1)
+    jobs = {finished_job(scout), finished_job(scout)}
+
+    def shown(at: AppTest) -> set[str]:
+        return {b.key.removeprefix("open-") for b in at.button if (b.key or "").startswith("open-")}
+
+    at = app(scout, page="History")
+    page1 = shown(at)
+    at.button[-2].click().run()  # Older → (the last button is Log out)
+    page2 = shown(at)
+    assert len(page1) == len(page2) == 1 and page1 | page2 == jobs
+    assert "← Newest" in [b.label for b in at.button]
+
+
+def test_documents_page_lists_uploads(scout: ScoutClient) -> None:
+    from tests.fakes import make_pdf
+
+    at = app(scout, page="Documents")
+    assert at.info[0].value == "No documents yet."
+    scout.upload("notes.pdf", make_pdf(["Some notes about inflation."]))
+    at.run()
+    assert any(
+        "notes.pdf" in m.value and "ready" in m.value and "1 page" in m.value for m in at.markdown
+    )
+
+
+def test_usage_page_shows_totals(scout: ScoutClient) -> None:
+    at = app(scout, page="Usage")
+    assert at.info[0].value == "No research in this period."
+    scout.feedback(finished_job(scout), "up")
+    at.run()
+    assert not at.exception
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Reports"] == "1" and metrics["👍"] == "1" and metrics["Failed"] == "0%"

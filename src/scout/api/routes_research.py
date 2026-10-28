@@ -15,7 +15,7 @@ from typing import Annotated
 import anyio
 from fastapi import APIRouter, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from scout.api.deps import CurrentUser, DbSession
@@ -134,15 +134,30 @@ def list_research(
     user: CurrentUser,
     db: DbSession,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    before: Annotated[
-        datetime | None, Query(description="created_at of the last item seen")
+    after: Annotated[
+        uuid.UUID | None, Query(description="id of the last job on the previous page")
     ] = None,
 ) -> list[JobSummaryOut]:
-    """Your research jobs, newest first. Page with ?before=<created_at of the last item>."""
+    """Your research jobs, newest first. Page with ?after=<id of the last job you got>.
+
+    Keyset paging on (created_at, id): jobs created in the same instant still page
+    correctly, and the database compares its own stored times (SQLite stores whole
+    seconds in a different text format from a bound datetime parameter)."""
     query = select(ResearchJob).where(ResearchJob.user_id == user.id)
-    if before is not None:
-        query = query.where(ResearchJob.created_at < before)
-    jobs = db.scalars(query.order_by(ResearchJob.created_at.desc()).limit(limit)).all()
+    if after is not None:
+        last = (
+            select(ResearchJob.created_at)
+            .where(ResearchJob.id == after, ResearchJob.user_id == user.id)
+            .scalar_subquery()
+        )
+        query = query.where(
+            or_(
+                ResearchJob.created_at < last,
+                and_(ResearchJob.created_at == last, ResearchJob.id < after),
+            )
+        )
+    order = (ResearchJob.created_at.desc(), ResearchJob.id.desc())
+    jobs = db.scalars(query.order_by(*order).limit(limit)).all()
     ratings = dict(
         db.execute(
             select(Feedback.job_id, Feedback.rating).where(
@@ -212,6 +227,7 @@ def get_research(job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbS
     events = db.scalars(
         select(JobEvent).where(JobEvent.job_id == job.id).order_by(JobEvent.id)
     ).all()
+    fb = db.scalar(select(Feedback).where(Feedback.job_id == job.id, Feedback.user_id == user.id))
     return JobOut(
         id=job.id,
         question=job.question,
@@ -223,6 +239,7 @@ def get_research(job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbS
         error=job.error,
         events=[JobEventOut.model_validate(e) for e in events],
         report=job.report if job.status in TERMINAL else None,
+        feedback=FeedbackOut(job_id=job.id, rating=fb.rating, comment=fb.comment) if fb else None,
     )
 
 

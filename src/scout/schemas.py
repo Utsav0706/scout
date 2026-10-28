@@ -122,6 +122,7 @@ class JobOut(BaseModel):
     error: str | None
     events: list[JobEventOut]
     report: dict | None  # the full report JSON once finished
+    feedback: FeedbackOut | None = None  # your rating of this report, if any
 
 
 class TrajectoryOut(BaseModel):

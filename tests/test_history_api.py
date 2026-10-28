@@ -45,9 +45,30 @@ def test_history_lists_my_jobs_newest_first_with_paging(client: TestClient) -> N
 
     page1 = client.get("/research?limit=2", headers=headers).json()
     assert [j["id"] for j in page1] == [str(ids[2]), str(ids[1])]
-    page2 = client.get(f"/research?limit=2&before={page1[-1]['created_at']}", headers=headers)
+    page2 = client.get(f"/research?limit=2&after={page1[-1]['id']}", headers=headers)
     assert [j["id"] for j in page2.json()] == [str(ids[0])]
     assert len(client.get("/research", headers=other).json()) == 1  # only their own
+    # Someone else's job id as the cursor gives nothing, not their place in your list.
+    assert client.get(f"/research?after={ids[0]}", headers=other).json() == []
+
+
+def test_history_pages_through_jobs_created_in_the_same_instant(client: TestClient) -> None:
+    headers = auth_headers(client)
+    me = _user_id(client, headers)
+    same = datetime.now(UTC) - timedelta(minutes=5)
+    with client.app.state.session_factory() as db:
+        for _ in range(3):
+            db.add(ResearchJob(user_id=me, question="q?", status="complete", created_at=same))
+        db.commit()
+
+    seen, after = [], None
+    for _ in range(4):
+        url = "/research?limit=1" + (f"&after={after}" if after else "")
+        page = client.get(url, headers=headers).json()
+        if not page:
+            break
+        seen.append(after := page[0]["id"])
+    assert len(seen) == len(set(seen)) == 3  # each job once, none skipped
 
 
 def test_stats_route_is_not_mistaken_for_a_job_id(client: TestClient) -> None:

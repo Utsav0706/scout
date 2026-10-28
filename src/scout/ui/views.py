@@ -16,6 +16,9 @@ VERDICT_BADGE = {
     "unverified": "❔ not checked",
 }
 _MD_SPECIAL = re.compile(r"([\\`*_\[\]<>#$~|])")
+RATING_ICON = {"up": "👍", "down": "👎"}
+STATUS_ICON = {"complete": "✅", "partial": "🟡", "failed": "❌", "queued": "⏳", "running": "⏳"}
+PAGE_SIZE = 20  # history rows per page
 
 
 def md(text: str) -> str:
@@ -117,6 +120,35 @@ def report_view(c: ScoutClient, job_id: str) -> None:
         st.error(md(job.get("error") or "This research job failed."))
         return
     render_report(report)
+    feedback_form(c, job_id, job.get("feedback"))
+
+
+def feedback_form(c: ScoutClient, job_id: str, current: dict | None) -> None:
+    """Thumbs up/down plus an optional comment. Sent together: the API stores both
+    (rating again replaces them) and passes the rating to Langfuse as a score."""
+    current = current or {}
+    with st.form(f"feedback-{job_id}"):
+        st.markdown("**Was this report useful?**")
+        rating = st.feedback(
+            "thumbs",
+            key=f"rating-{job_id}",
+            default={"up": 1, "down": 0}.get(current.get("rating")),
+        )
+        comment = st.text_input(
+            "Comment (optional)",
+            value=current.get("comment") or "",
+            max_chars=1000,
+            key=f"comment-{job_id}",
+        )
+        if st.form_submit_button("Send feedback"):
+            if rating is None:
+                st.warning("Pick 👍 or 👎 first.")
+                return
+            try:
+                c.feedback(job_id, "up" if rating == 1 else "down", comment.strip() or None)
+                st.success("Thanks, feedback saved.")
+            except ScoutError as exc:
+                st.error(md(exc.message))
 
 
 def _source_line(src: dict) -> str:
@@ -172,3 +204,116 @@ def render_report(report: dict) -> None:
     if report.get("trace_id"):
         parts.append(f"trace {report['trace_id'][:12]}…")
     st.caption(" · ".join(parts))
+
+
+# --- history ---
+
+
+def _open_job(job_id: str) -> None:
+    # A button callback runs before the page is drawn, so it may switch the sidebar page.
+    st.session_state["job_id"] = job_id
+    st.session_state["page"] = "Ask"
+
+
+def history_page(c: ScoutClient) -> None:
+    st.title("History")
+    after = st.session_state.get("history_after")
+    try:
+        jobs = c.history(limit=PAGE_SIZE, after=after)
+    except ScoutError as exc:
+        st.error(md(exc.message))
+        return
+    if not jobs:
+        st.info("No older reports." if after else "No research yet. Ask a question first.")
+    for job in jobs:
+        text_col, open_col = st.columns([5, 1])
+        text_col.markdown(f"**{md(job['question'])}**")
+        when = job["created_at"][:16].replace("T", " ")
+        icon = STATUS_ICON.get(job["status"], "")
+        rating = RATING_ICON.get(job.get("rating") or "", "")
+        text_col.caption(f"{when} UTC · {icon} {job['status']} · £{job['cost_gbp']:.4f} {rating}")
+        open_col.button("Open", key=f"open-{job['id']}", on_click=_open_job, args=(job["id"],))
+
+    newer_col, older_col = st.columns(2)
+    if after and newer_col.button("← Newest"):
+        st.session_state.pop("history_after")
+        st.rerun()
+    if len(jobs) == PAGE_SIZE and older_col.button("Older →"):
+        st.session_state["history_after"] = jobs[-1]["id"]
+        st.rerun()
+
+
+# --- documents ---
+
+DOC_STATUS = {"processing": "⏳ processing", "ready": "✅ ready", "failed": "❌ failed"}
+
+
+def documents_page(c: ScoutClient) -> None:
+    st.title("My documents")
+    st.caption(
+        "PDFs you upload are searched when **Search my documents** is ticked. "
+        "Only you can see them."
+    )
+    with st.form("upload", clear_on_submit=True):
+        file = st.file_uploader("Add a PDF (max 20 MB)", type=["pdf"])
+        if st.form_submit_button("Upload") and file is not None:
+            try:
+                c.upload(file.name, file.getvalue())
+                st.success(md(f"Uploaded {file.name}. Processing it now."))
+            except ScoutError as exc:
+                st.error(md(exc.message))
+
+    try:
+        docs = c.documents()
+    except ScoutError as exc:
+        st.error(md(exc.message))
+        return
+    if not docs:
+        st.info("No documents yet.")
+        return
+    for doc in docs:
+        line = f"**{md(doc['filename'])}** · {DOC_STATUS.get(doc['status'], doc['status'])}"
+        if doc["status"] == "ready":
+            line += f" · {doc['pages']} page{'' if doc['pages'] == 1 else 's'}"
+        st.markdown(line)
+        if doc.get("error"):
+            st.caption(md(doc["error"]))
+    if any(d["status"] == "processing" for d in docs):
+        st.button("Refresh")  # any click reruns the page, which reloads the list
+
+
+# --- stats ---
+
+
+def _or_dash(value: float | None, fmt: str) -> str:
+    return "–" if value is None else fmt.format(value)
+
+
+def stats_page(c: ScoutClient) -> None:
+    st.title("My usage")
+    days = st.selectbox("Period", [7, 30, 90], index=1, format_func=lambda d: f"Last {d} days")
+    try:
+        s = c.stats(days)
+    except ScoutError as exc:
+        st.error(md(exc.message))
+        return
+    if not s["jobs"]:
+        st.info("No research in this period.")
+        return
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Reports", s["finished"])
+    col2.metric("Avg cost", _or_dash(s["avg_cost_gbp"], "£{:.4f}"))
+    col3.metric("Avg time", _or_dash(s["avg_latency_s"], "{:.0f}s"))
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Failed", _or_dash(s["failure_rate"], "{:.0%}"))
+    col2.metric("👍", s["thumbs_up"])
+    col3.metric("👎", s["thumbs_down"])
+
+    if per_day := s["reports_per_day"]:
+        st.markdown("**Reports per day**")
+        st.bar_chart(
+            {"day": [d["day"] for d in per_day], "reports": [d["reports"] for d in per_day]},
+            x="day",
+            y="reports",
+        )

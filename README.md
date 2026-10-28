@@ -7,7 +7,7 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M9a — web UI (ask + live progress + report).** `POST /research` returns a job id
+Status: **M9 — web UI.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -103,7 +103,8 @@ With Docker (Postgres, Redis, API, worker):
 docker compose up --build
 ```
 
-Then open http://localhost:8000/docs for the interactive API docs.
+Then open http://localhost:8501 for the web UI, or http://localhost:8000/docs for the
+interactive API docs.
 
 | Endpoint | What |
 |---|---|
@@ -115,10 +116,10 @@ Then open http://localhost:8000/docs for the interactive API docs.
 | `GET /documents` | Your documents with `status` (`processing` / `ready` / `failed` + `error`) |
 | `POST /documents/search` | `{query, document_ids?, top_k?}` → best chunks with page numbers |
 | `POST /research` | `{question, use_web?, use_docs?}` → **202** `{job_id, status_url}` |
-| `GET /research/{id}` | Status, progress events, and the report (JSON) when finished |
+| `GET /research/{id}` | Status, progress events, the report (JSON) when finished, and your feedback |
 | `GET /research/{id}/trajectory` | Every model and tool call of a finished run (inputs/outputs masked), plus sources and claims; for evaluation tools |
 | `GET /research/{id}/stream` | Server-sent events: `progress` per step, then `done`; resumes from `Last-Event-ID` |
-| `GET /research` | Your past jobs, newest first (`limit` 1–100, `before` for paging), with your rating |
+| `GET /research` | Your past jobs, newest first (`limit` 1–100; next page: `after=<id of the last job>`), with your rating |
 | `GET /research/stats` | Your last `days` (1–90): jobs, spend, average latency, support rate, thumbs up/down, jobs per day |
 | `POST /research/{id}/feedback` | `{rating: up\|down, comment?}` on a finished job; rating again replaces it. Also sent to Langfuse as a `user_feedback` score on that run's trace |
 
@@ -137,7 +138,18 @@ uvicorn scout.api.main:create_app --factory
 A Streamlit app talks to the API over HTTP (it never touches the database), so it can
 run anywhere the API is reachable. Log in or create an account, ask a question, watch
 each step stream in, then read the report: every claim has a verdict badge and a
-**Sources** pop-up with the link and the exact words the verifier matched.
+**Sources** pop-up with the link and the exact words the verifier matched. Under the
+report, rate it 👍/👎 with an optional comment.
+
+| Page | What |
+|---|---|
+| Ask | Question form, live progress, the report and its feedback form |
+| History | Your past reports, newest first, 20 per page; **Open** shows one again |
+| Documents | Upload PDFs and see their status (processing / ready / failed) |
+| Usage | Reports, average cost and time, failure rate and 👍/👎 for the last 7/30/90 days |
+
+In Docker Compose the `ui` service has its own small image (`Dockerfile.ui`: Streamlit +
+httpx only, no torch or models) and calls the API at `http://api:8000`.
 
 Model-written text is escaped before display: no links, HTML or formatting from a model
 or a web page reach the screen, and prices like "$5" don't turn into maths.
@@ -291,6 +303,7 @@ pytest
 | `src/scout/ui/` | `ScoutClient` (HTTP client for the API) and the Streamlit pages. |
 | `ui/app.py` | Streamlit entry point. |
 | `scripts/` | Dev launchers, compose smoke test, red-team run. |
+| `Dockerfile`, `Dockerfile.ui` | API/worker image; lean UI image. |
 | `prompts/` | Versioned prompt files (from M4). |
 | `docs/` | Design notes. |
 | `tests/` | pytest suite, run in CI on every push/PR. |

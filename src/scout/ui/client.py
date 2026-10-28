@@ -89,10 +89,11 @@ class ScoutClient:
     def job(self, job_id: str) -> dict:
         return self._request("GET", f"/research/{job_id}")
 
-    def history(self, limit: int = 20, before: str | None = None) -> list[dict]:
+    def history(self, limit: int = 20, after: str | None = None) -> list[dict]:
+        """Newest first; pass the id of the last job of one page to get the next page."""
         params: dict[str, Any] = {"limit": limit}
-        if before:
-            params["before"] = before
+        if after:
+            params["after"] = after
         return self._request("GET", "/research", params=params)
 
     def stats(self, days: int = 30) -> dict:

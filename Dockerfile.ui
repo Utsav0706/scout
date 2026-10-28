@@ -1,0 +1,25 @@
+# The Streamlit UI. Separate from the API image: the UI only talks to the API over HTTP,
+# so it needs Streamlit + httpx, not torch, the models or the database drivers
+# (~300 MB instead of ~2 GB).
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+RUN pip install "streamlit>=1.40,<2" "httpx>=0.28"
+
+# Only the UI code: scout/__init__.py and scout/ui/ import nothing else from the package.
+COPY src/scout/__init__.py ./src/scout/__init__.py
+COPY src/scout/ui ./src/scout/ui
+COPY ui ./ui
+
+RUN useradd --create-home --uid 1000 scout
+USER scout
+
+EXPOSE 8501
+CMD ["streamlit", "run", "ui/app.py", "--server.address=0.0.0.0", "--server.port=8501", \
+     "--server.headless=true", "--browser.gatherUsageStats=false"]
