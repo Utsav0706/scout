@@ -4,8 +4,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+from scout.db import Base
 from scout.models import ResearchJob
 from tests.conftest import auth_headers
 from tests.test_research_api import QUESTION, make_client, wait_done
@@ -80,10 +82,13 @@ def test_stats_with_no_jobs(client: TestClient) -> None:
 # --- feedback ---
 
 
-def test_feedback_is_stored_overwritten_and_sent_to_langfuse(tmp_path: Path, spans) -> None:
+def test_feedback_is_stored_overwritten_and_sent_to_langfuse(
+    tmp_path: Path, spans, request: pytest.FixtureRequest
+) -> None:
     # spans: tracing on, so the run has a trace id to attach the score to.
     sent = []
     with make_client(tmp_path) as client:
+        request.addfinalizer(lambda: Base.metadata.drop_all(client.app.state.engine))
         client.app.state.send_score = lambda *args: sent.append(args)
         headers = auth_headers(client)
         job_id = client.post("/research", json=QUESTION, headers=headers).json()["job_id"]

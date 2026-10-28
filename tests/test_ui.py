@@ -10,6 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 from streamlit.testing.v1 import AppTest
 
+from scout.db import Base
+from scout.jobs import worker
 from scout.ui.client import ScoutClient, ScoutError
 from scout.ui.views import md
 from tests.conftest import REPO_ROOT
@@ -23,6 +25,8 @@ APP = str(REPO_ROOT / "ui" / "app.py")
 def api(tmp_path: Path) -> Iterator[TestClient]:
     with make_client(tmp_path) as client:
         yield client
+    worker.configure(None)
+    Base.metadata.drop_all(client.app.state.engine)  # CI shares one Postgres DB
 
 
 @pytest.fixture

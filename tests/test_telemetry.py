@@ -148,10 +148,12 @@ async def test_trajectory_lists_every_call_in_order(db_factory) -> None:
     assert "trajectory" not in report.model_dump()  # stored separately, not in the report
 
 
-def test_trajectory_endpoint(tmp_path: Path) -> None:
+def test_trajectory_endpoint(tmp_path: Path, request: pytest.FixtureRequest) -> None:
+    from scout.db import Base
     from tests.test_research_api import QUESTION, make_client, wait_done
 
     with make_client(tmp_path) as client:
+        request.addfinalizer(lambda: Base.metadata.drop_all(client.app.state.engine))
         headers = auth_headers(client)
         job_id = client.post("/research", json=QUESTION, headers=headers).json()["job_id"]
         wait_done(client, job_id, headers)
