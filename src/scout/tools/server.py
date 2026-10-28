@@ -31,6 +31,7 @@ from pydantic import Field
 from sqlalchemy import select
 
 from scout.models import ToolCall, User
+from scout.safety.redact import redact, redact_value
 from scout.tools import impl
 from scout.tools.context import ToolContext
 
@@ -74,11 +75,11 @@ class AuditMiddleware(ServerMiddleware[Any]):
             result = await call_next(rctx)
             is_error, text = _result_info(result)
             status = "error" if is_error else "ok"
-            error = text[:1000] if is_error else None
+            error = redact(text)[:1000] if is_error else None
             chars = len(text)
             return result
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"[:1000]
+            error = redact(f"{type(exc).__name__}: {exc}")[:1000]
             raise
         finally:
             await self._record(tool, args, status, error, chars, start)
@@ -87,6 +88,8 @@ class AuditMiddleware(ServerMiddleware[Any]):
         self, tool: str, args: Any, status: str, error: str | None, chars: int, start: float
     ) -> None:
         ms = int((time.perf_counter() - start) * 1000)
+        # The audit log keeps WHAT was called, with personal data masked (safety.redact).
+        args = redact_value(args)
         dumped = json.dumps(args, default=str)
         safe_args = args if len(dumped) <= _MAX_AUDIT_ARG_CHARS else {"truncated": dumped[:2000]}
         row = ToolCall(

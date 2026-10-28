@@ -18,7 +18,7 @@ from langgraph.types import Send
 
 from scout.agent.budget import BudgetExceeded
 from scout.agent.calls import llm_call, tool_call
-from scout.agent.report import Claim, Report, ReportSource, Section
+from scout.agent.report import Claim, Report, ReportSource, Section, StepRecord
 from scout.agent.state import (
     AgentDeps,
     DraftOut,
@@ -30,6 +30,7 @@ from scout.agent.state import (
     ResearchState,
 )
 from scout.llm.client import LLMError, ToolCall
+from scout.safety.injection import neutralise_markup
 
 log = logging.getLogger(__name__)
 
@@ -149,9 +150,7 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
 
         # Run this turn's tool calls in parallel, then return all results in ONE user
         # message (splitting them teaches the model to stop calling tools in parallel).
-        outcomes = await asyncio.gather(
-            *(tool_call(deps, "researcher", c.name, c.input) for c in res.tool_calls)
-        )
+        outcomes = await asyncio.gather(*(_allowed_tool_call(deps, c) for c in res.tool_calls))
         results = []
         for call, (ok, structured, text) in zip(res.tool_calls, outcomes, strict=True):
             results.append(_tool_result(call, ok, text))
@@ -162,6 +161,25 @@ async def researcher(state: ResearcherInput, runtime: Runtime[AgentDeps]) -> dic
 
     # Sub-questions left without sources are reported by the finaliser, after any retry.
     return {"evidence": evidence, "problems": problems}
+
+
+async def _allowed_tool_call(deps: AgentDeps, call: ToolCall) -> tuple[bool, Any, str]:
+    """Only tools the researcher was offered can run. The MCP server would execute any
+    tool it has (save_note included) if a fooled model named it; refuse that here."""
+    if call.name not in {t["name"] for t in deps.research_tools}:
+        deps.steps.append(
+            StepRecord(
+                node="researcher",
+                kind="tool",
+                name=call.name,
+                ok=False,
+                ms=0,
+                detail="refused: not a research tool",
+            )
+        )
+        log.warning("model asked for a tool it wasn't given", extra={"tool": call.name[:64]})
+        return False, None, f"Tool {call.name!r} is not available. Use the tools listed."
+    return await tool_call(deps, "researcher", call.name, call.input)
 
 
 def _tool_result(call: ToolCall, ok: bool, text: str) -> dict[str, Any]:
@@ -375,13 +393,22 @@ async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[s
         if s.id in cited
     ]
 
+    # Model-written text may carry markup copied from a page: neutralise it before it can
+    # be rendered (an image link would leak data to whoever's server it points at).
+    sections = [
+        Section(
+            heading=neutralise_markup(sec.heading),
+            claims=[c.model_copy(update={"text": neutralise_markup(c.text)}) for c in sec.claims],
+        )
+        for sec in sections
+    ]
     report = Report(
         question=state["question"],
         status=status,
-        summary=summary,
+        summary=neutralise_markup(summary),
         sections=sections,
         sources=sources,
-        limitations=limitations,
+        limitations=[neutralise_markup(item) for item in limitations],
         stop_reason=budget.stop_reason,
         verification=state.get("verification"),
         cost_gbp=round(budget.cost_gbp, 6),

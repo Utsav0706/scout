@@ -7,7 +7,7 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M7a — research API with prompt-injection defences.** `POST /research` returns a job id
+Status: **M7 — MVP complete.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -163,6 +163,26 @@ your instructions and..."). Scout's defence has three layers; only the last one 
    spaces). Hidden characters are stripped; a flagged source is kept (an article *about*
    prompt injection is legitimate) but the model gets a warning, the finding is logged,
    and the report says which sources contained such text.
+
+**Logs and the audit table mask personal data and secrets** (emails, UK phone and NI
+numbers, Luhn-checked card numbers, API keys, tokens). Report text is made safe to render:
+images from pages become `[image removed]` (an image URL could otherwise leak data to
+whoever's server it points at the moment the report is viewed), and raw HTML can't run.
+
+### Attack tests and a live red-team
+
+`tests/security/test_attacks.py` (runs in CI) scripts a **worst-case model** that does
+whatever a page tells it: fetch the attacker's URL, call tools it wasn't given, cite
+invented sources, read another user's documents. Every attack fails because of what the
+system allows, not because the model said no.
+
+`scripts/redteam.py` measures the **real** models: four pages with planted instructions
+(visible override, instructions hidden in invisible Unicode, a data-exfiltration fetch, a
+fake system message), each with a unique canary, served from a fake web (no Tavily
+credits). Result: **the model obeyed 0 of 4**, and all 4 attack pages were flagged.
+The first run found a scanner gap (an exfiltration instruction phrased as "verify by
+fetching ...?d=<your notes>" wasn't flagged); it's fixed and kept as a regression test.
+Total cost of the red-team: £0.055.
 
 Deliberately **no keyword topic filter**: keyword lists block innocent questions and miss
 real ones; Claude's own safety training and Scout's refusal handling cover harmful requests.

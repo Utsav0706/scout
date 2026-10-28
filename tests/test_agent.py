@@ -14,6 +14,7 @@ from scout.agent.graph import run_research
 from scout.agent.nodes import _pick_sources
 from scout.agent.report import to_markdown
 from scout.agent.state import (
+    ClaimRevision,
     ClaimVerdict,
     DraftClaim,
     DraftOut,
@@ -21,6 +22,7 @@ from scout.agent.state import (
     Evidence,
     PlanOut,
     ReaderOut,
+    ReviseOut,
     VerifyOut,
 )
 from scout.llm.client import LLMError, LLMResult, ToolCall, Usage
@@ -85,6 +87,15 @@ def default_script(node: str, kw: dict[str, Any]) -> LLMResult | Exception:
         )
     if node == "verifier":
         return result(node, parsed=verify_all(msgs[0]["content"], "supported"))
+    if node == "reviser":  # default: delete whatever failed
+        failed = [int(i) for i in re.findall(r'<failed_claim id="(\d+)"', msgs[0]["content"])]
+        return result(
+            node,
+            parsed=ReviseOut(
+                summary="Revised summary.",
+                revisions=[ClaimRevision(claim_id=i, action="delete") for i in failed],
+            ),
+        )
     raise AssertionError(node)
 
 
