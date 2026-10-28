@@ -36,6 +36,7 @@ from scout.rag.models_ml import (
     SentenceTransformerEmbedder,
 )
 from scout.schemas import HealthOut
+from scout.telemetry import setup_tracing
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ def create_app(
     secrets = secrets or get_secrets()
     config = config or get_config()
     setup_logging(secrets.log_level)
+    setup_tracing(secrets)  # no-op without Langfuse keys
     jwt_secret = require_jwt_secret(secrets.jwt_secret)
     engine = make_engine(secrets.database_url)
     make_queue = queue_factory or default_queue(secrets, config)

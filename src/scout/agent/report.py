@@ -65,6 +65,26 @@ class StepRecord(BaseModel):
     detail: str | None = None
 
 
+class TrajectoryStep(BaseModel):
+    """One model or tool call with what went in and out: the run's full trajectory,
+    exported for evaluation (Dyno) via GET /research/{id}/trajectory. Personal data masked
+    and long text cut, as in traces."""
+
+    i: int  # order within the run
+    node: str
+    kind: Literal["llm_call", "tool_call"]
+    name: str  # model id, or tool name
+    ok: bool
+    start_ms: int  # since the run started
+    ms: int
+    input: str | None = None
+    output: str | None = None
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_gbp: float = 0.0
+    error: str | None = None
+
+
 class Report(BaseModel):
     question: str
     status: Status
@@ -78,6 +98,9 @@ class Report(BaseModel):
     latency_s: float
     steps: list[StepRecord] = Field(default_factory=list)
     prompt_versions: dict[str, str] = Field(default_factory=dict)
+    trace_id: str | None = None  # the run's trace in Langfuse (when tracing is on)
+    # Stored separately (job_trajectories), so it's left out of the report's JSON.
+    trajectory: list[TrajectoryStep] = Field(default_factory=list, exclude=True)
 
 
 # Supported claims are shown plain; anything else is flagged so a reader can't miss it.

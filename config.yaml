@@ -99,6 +99,11 @@ agent:
   # retry round is skipped) rather than leave nothing to finish the report with.
   finish_reserve_gbp: 0.08
 
+telemetry:
+  # Traces go to Langfuse when LANGFUSE_* keys are set (see .env.example).
+  capture_content: true  # inputs/outputs on spans; personal data masked first
+  max_field_chars: 4000  # each input/output is cut to this length
+
 jobs:
   max_running_per_user: 2   # queued + running at once
   max_per_hour_per_user: 10

@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from scout.agent.budget import RunBudget
 from scout.agent.prompts import Prompt
-from scout.agent.report import StepRecord
+from scout.agent.report import StepRecord, TrajectoryStep
 from scout.config import AppConfig
 from scout.llm.client import LLMClient
 from scout.tools.context import ToolContext
@@ -79,6 +79,7 @@ class AgentDeps:
     prompts: dict[str, Prompt]
     research_tools: list[dict[str, Any]]  # Anthropic tool definitions, from MCP list_tools
     steps: list[StepRecord] = field(default_factory=list)
+    trajectory: list[TrajectoryStep] = field(default_factory=list)
 
 
 # --- structured outputs the nodes ask the models for ---

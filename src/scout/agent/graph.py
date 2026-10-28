@@ -30,6 +30,7 @@ from scout.agent.state import AgentDeps, ResearchState
 from scout.agent.verifier import verifier
 from scout.config import AppConfig
 from scout.llm.client import LLMClient
+from scout.telemetry import run_scope, set_content, trace_id_of, tracer
 from scout.tools.context import ToolContext
 from scout.tools.server import build_server
 
@@ -51,15 +52,31 @@ PROMPT_VERSIONS = {
 }
 
 
+def traced(name: str, node):
+    """Run a node inside its own span, so a trace shows the graph's steps with each
+    step's model and tool calls nested underneath. Same (state, runtime) signature as
+    the node, which LangGraph inspects to know what to pass."""
+
+    async def run(state, runtime):
+        with tracer().start_as_current_span(name) as span:
+            if name == "researcher":
+                span.set_attribute("scout.sub_question", state.get("sub_question", ""))
+            return await node(state, runtime)
+
+    run.__name__ = name
+    run.__annotations__ = node.__annotations__  # LangGraph reads the Runtime annotation
+    return run
+
+
 def build_graph():  # -> CompiledStateGraph
     g = StateGraph(ResearchState, context_schema=AgentDeps)
-    g.add_node("planner", planner)
-    g.add_node("researcher", researcher)
-    g.add_node("reader", reader)
-    g.add_node("writer", writer)
-    g.add_node("verifier", verifier)
-    g.add_node("reviser", reviser)
-    g.add_node("finaliser", finaliser)
+    g.add_node("planner", traced("planner", planner))
+    g.add_node("researcher", traced("researcher", researcher))
+    g.add_node("reader", traced("reader", reader))
+    g.add_node("writer", traced("writer", writer))
+    g.add_node("verifier", traced("verifier", verifier))
+    g.add_node("reviser", traced("reviser", reviser))
+    g.add_node("finaliser", traced("finaliser", finaliser))
 
     g.add_edge(START, "planner")
     g.add_conditional_edges("planner", fan_out, ["researcher", "finaliser"])
@@ -141,29 +158,42 @@ async def run_research(
     prompts = {name: load_prompt(name, v) for name, v in PROMPT_VERSIONS.items()}
     report: Report | None = None
 
-    async with Client(build_server(tool_ctx)) as mcp:
-        listed = (await mcp.list_tools()).tools
-        deps = AgentDeps(
-            config=config,
-            llm=llm,
-            mcp=mcp,
-            tool_ctx=tool_ctx,
-            budget=budget,
-            prompts=prompts,
-            research_tools=_research_tools(listed, use_web, use_docs),
-        )
-        # stream_mode="updates" yields {node: update} as each node finishes: the same run
-        # as ainvoke(), plus a progress line per step for the job's live event stream.
-        async for chunk in build_graph().astream(
-            {"question": question, "use_web": use_web, "use_docs": use_docs},
-            context=deps,
-            stream_mode="updates",
-        ):
-            for node, update in chunk.items():
-                if node == "finaliser" and update:
-                    report = update["report"]
-                if on_event and (message := describe(node, update)):
-                    await on_event(node, message)
+    # One trace per run; every span in it carries the user and job ids (run_scope).
+    with (
+        run_scope(tool_ctx.user_id, tool_ctx.job_id),
+        tracer().start_as_current_span("research") as root,
+    ):
+        root.set_attribute("langfuse.trace.name", "research")
+        set_content(root, config.telemetry, input=question)
+        async with Client(build_server(tool_ctx)) as mcp:
+            listed = (await mcp.list_tools()).tools
+            deps = AgentDeps(
+                config=config,
+                llm=llm,
+                mcp=mcp,
+                tool_ctx=tool_ctx,
+                budget=budget,
+                prompts=prompts,
+                research_tools=_research_tools(listed, use_web, use_docs),
+            )
+            # stream_mode="updates" yields {node: update} as each node finishes: the same run
+            # as ainvoke(), plus a progress line per step for the job's live event stream.
+            async for chunk in build_graph().astream(
+                {"question": question, "use_web": use_web, "use_docs": use_docs},
+                context=deps,
+                stream_mode="updates",
+            ):
+                for node, update in chunk.items():
+                    if node == "finaliser" and update:
+                        report = update["report"]
+                    if on_event and (message := describe(node, update)):
+                        await on_event(node, message)
+        if report is not None:
+            set_content(
+                root, config.telemetry, output={"status": report.status, "summary": report.summary}
+            )
+            root.set_attribute("scout.status", report.status)
+            report.trace_id = trace_id_of(root)
 
     if report is None:  # the graph always ends in the finaliser; this is a bug guard
         raise RuntimeError("research graph finished without a report")

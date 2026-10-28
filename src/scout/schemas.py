@@ -122,3 +122,16 @@ class JobOut(BaseModel):
     error: str | None
     events: list[JobEventOut]
     report: dict | None  # the full report JSON once finished
+
+
+class TrajectoryOut(BaseModel):
+    """A finished run, step by step, for evaluation tools (Dyno): every model and tool
+    call in order, plus the sources and the final claims with their verdicts."""
+
+    job_id: uuid.UUID
+    question: str
+    status: str
+    trace_id: str | None
+    steps: list[dict]
+    sources: list[dict]
+    claims: list[dict]

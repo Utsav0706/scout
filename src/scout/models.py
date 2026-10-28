@@ -160,3 +160,18 @@ class JobEvent(Base):
     node: Mapped[str] = mapped_column(String(32))
     message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class JobTrajectory(Base):
+    """A finished job's step-by-step record (model and tool calls with inputs and outputs),
+    exported for evaluation: GET /research/{id}/trajectory. Its own table so the jobs
+    table stays small and the report JSON doesn't carry every prompt."""
+
+    __tablename__ = "job_trajectories"
+
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("research_jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    trace_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    steps: Mapped[list] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

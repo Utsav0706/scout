@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 import anyio
 
 from scout.agent.runtime import Services, research
-from scout.models import Document, JobEvent, ResearchJob
+from scout.models import Document, JobEvent, JobTrajectory, ResearchJob
 from scout.rag.store import process_document
 
 log = logging.getLogger(__name__)
@@ -96,6 +96,13 @@ async def run_job(services: Services, job_id: uuid.UUID) -> None:
                 row.status = report.status
                 row.report = report.model_dump(mode="json")
                 row.cost_gbp = report.cost_gbp
+                db.add(
+                    JobTrajectory(
+                        job_id=job_id,
+                        trace_id=report.trace_id,
+                        steps=[s.model_dump() for s in report.trajectory],
+                    )
+                )
                 message = f"Finished: {report.status}, £{report.cost_gbp:.4f}"
             else:
                 row.status, row.error = "failed", error

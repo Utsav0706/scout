@@ -414,6 +414,7 @@ async def finaliser(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[s
         cost_gbp=round(budget.cost_gbp, 6),
         latency_s=round(budget.elapsed_s, 2),
         steps=deps.steps,
+        trajectory=deps.trajectory,
         prompt_versions={name: p.tag for name, p in deps.prompts.items()},
     )
     return {"report": report}

@@ -20,9 +20,9 @@ from sqlalchemy.orm import Session
 from scout.api.deps import CurrentUser, DbSession
 from scout.jobs.queue import QueueUnavailableError
 from scout.jobs.runner import TERMINAL
-from scout.models import JobEvent, ResearchJob
+from scout.models import JobEvent, JobTrajectory, ResearchJob
 from scout.safety.injection import scan
-from scout.schemas import JobCreatedOut, JobEventOut, JobOut, ResearchIn
+from scout.schemas import JobCreatedOut, JobEventOut, JobOut, ResearchIn, TrajectoryOut
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/research", tags=["research"])
@@ -212,4 +212,32 @@ async def stream_research(
         media_type="text/event-stream",
         # no-cache: never serve a stored copy; X-Accel-Buffering: stop nginx buffering it.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/{job_id}/trajectory", response_model=TrajectoryOut)
+def get_trajectory(
+    job_id: uuid.UUID, request: Request, user: CurrentUser, db: DbSession
+) -> TrajectoryOut:
+    """Every model and tool call of a finished run, with inputs and outputs (personal data
+    masked, long text cut), plus its sources and final claims. Read by Dyno's adapter."""
+    job = _own_job(db, job_id, user.id)
+    _fail_if_stale(db, job, request.app.state.config.jobs.stale_after_s)
+    if job.status not in TERMINAL:
+        raise HTTPException(status.HTTP_409_CONFLICT, "The job hasn't finished yet")
+    row = db.get(JobTrajectory, job.id)  # absent if the run failed before a report
+    report = job.report or {}
+    claims = [
+        {"section": sec["heading"], **claim}
+        for sec in report.get("sections", [])
+        for claim in sec["claims"]
+    ]
+    return TrajectoryOut(
+        job_id=job.id,
+        question=job.question,
+        status=job.status,
+        trace_id=row.trace_id if row else None,
+        steps=row.steps if row else [],
+        sources=report.get("sources", []),
+        claims=claims,
     )

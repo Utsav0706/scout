@@ -23,6 +23,7 @@ from scout.config import get_config, get_secrets
 from scout.db import init_db, make_engine
 from scout.jobs.runner import run_ingest, run_job
 from scout.log import setup_logging
+from scout.telemetry import setup_tracing
 
 _override: Services | None = None
 
@@ -37,6 +38,7 @@ def configure(services: Services | None) -> None:
 def _services_from_env() -> Services:
     secrets, config = get_secrets(), get_config()
     setup_logging(secrets.log_level)
+    setup_tracing(secrets)
     engine = make_engine(secrets.database_url)
     init_db(engine)
     return Services.create(config, secrets, sessionmaker(engine, expire_on_commit=False))

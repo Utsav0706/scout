@@ -60,6 +60,13 @@ class ModelPrice(BaseModel):
     cache_write: float = Field(ge=0)
 
 
+class TelemetryConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    capture_content: bool = True
+    max_field_chars: int = Field(default=4000, ge=100, le=100_000)
+
+
 class JobsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -139,6 +146,7 @@ class AppConfig(BaseModel):
     tools: ToolsConfig
     agent: AgentConfig
     jobs: JobsConfig
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     limits: Limits
     prices_usd_per_mtok: dict[str, ModelPrice]
     usd_to_gbp: float = Field(gt=0)

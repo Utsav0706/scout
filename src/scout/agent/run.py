@@ -24,6 +24,7 @@ from scout.config import get_config, get_secrets
 from scout.db import db_is_up, init_db, make_engine
 from scout.log import setup_logging
 from scout.models import User
+from scout.telemetry import setup_tracing
 
 
 def _args(argv: list[str] | None) -> argparse.Namespace:
@@ -41,6 +42,7 @@ def _args(argv: list[str] | None) -> argparse.Namespace:
 
 async def _main(args: argparse.Namespace) -> Report:
     secrets, config = get_secrets(), get_config()
+    setup_tracing(secrets)  # traces go to Langfuse when its keys are set
     if secrets.anthropic_api_key is None:
         raise SystemExit("ANTHROPIC_API_KEY is not set (see .env.example).")
 

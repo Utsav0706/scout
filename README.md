@@ -7,7 +7,7 @@ report where each claim links to its source.
 > Headline (filled in once measured): *"Scout answers research questions with X% of
 > claims verified against sources, in Y seconds, for £Z per report."*
 
-Status: **M7 — MVP complete.** `POST /research` returns a job id
+Status: **M8 — MVP + tracing.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -116,6 +116,7 @@ Then open http://localhost:8000/docs for the interactive API docs.
 | `POST /documents/search` | `{query, document_ids?, top_k?}` → best chunks with page numbers |
 | `POST /research` | `{question, use_web?, use_docs?}` → **202** `{job_id, status_url}` |
 | `GET /research/{id}` | Status, progress events, and the report (JSON) when finished |
+| `GET /research/{id}/trajectory` | Every model and tool call of a finished run (inputs/outputs masked), plus sources and claims; for evaluation tools |
 | `GET /research/{id}/stream` | Server-sent events: `progress` per step, then `done`; resumes from `Last-Event-ID` |
 
 Research jobs run on an **RQ worker** (Redis) in production. For local development on
@@ -142,6 +143,22 @@ Vectors catch paraphrases ("money back" ≈ "refund"); keywords catch exact name
 and numbers. RRF merges the two ranked lists without having to compare their raw scores.
 The cross-encoder then reads query + chunk together to put the best ones first. Every
 search is limited to the caller's own documents.
+
+## Tracing (Langfuse)
+
+Set `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` and every run becomes one trace in
+[Langfuse](https://langfuse.com): a span per graph step, a *generation* per model call
+(model, tokens, cost) and a *tool* observation per tool call, each with its inputs and
+outputs (personal data masked, cut to 4,000 chars; `telemetry.capture_content: false`
+sends only names, tokens, cost and timing). Every span carries the user and job ids.
+Reports include their `trace_id`.
+
+Built on OpenTelemetry (exported over OTLP), not Langfuse's SDK: vendor-neutral, and the
+same standard Gearbox and Dyno use. Only Scout's own spans are exported: the Anthropic and
+MCP SDKs trace themselves too, and on the first live trace their copies duplicated every
+call (137 observations for 62 calls) and doubled the cost Langfuse showed. Now one
+observation per call, and Langfuse's cost matches Scout's to the penny (about 77 units a
+run; the free tier covers ~650 runs a month).
 
 ## Safety: outside text is data, never instructions
 
