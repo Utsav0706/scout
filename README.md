@@ -10,10 +10,31 @@ report where each claim links to its source.
 > verifier; an independent judge agrees with 66% of sampled citations.
 > ([baseline](eval/results/baseline-2026-10-28/summary.md), 28 Oct 2026)
 
-Status: **M10 — golden-set eval with baseline numbers.** `POST /research` returns a job id
+Status: **M11a — system design doc.** `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    ui["Streamlit UI"] -- "HTTP + JWT" --> api["FastAPI"]
+    api -- "job id" --> q[("Redis queue")]
+    q --> w["Worker: agent graph"]
+    w --> mcp["MCP tools<br/>web_search · fetch_url<br/>rag_search · save_note"]
+    mcp --> ext["Tavily + web"]
+    mcp --> pg[("Postgres + pgvector")]
+    api <--> pg
+    w <--> pg
+    w --> llm["Claude Sonnet / Haiku"]
+    w -. "traces" .-> lf["Langfuse"]
+```
+
+Agent graph: **planner → parallel researchers → reader → writer → verifier → reviser**
+(one retry round if needed) **→ finaliser**, inside a hard budget of 50 model calls,
+£0.20 and 180 s per report. The full design, with every guardrail and the reasons
+behind each choice, is in **[docs/design.md](docs/design.md)**.
 
 ## Ask a question
 
@@ -388,5 +409,5 @@ pytest
 | `prompts/` | Versioned prompt files (from M4). |
 | `src/scout/eval/` | Golden-set eval: cases, corpus, scorers, judges, runner. |
 | `eval/` | `golden.yaml` (50 cases) and `corpus/` (made-up company files). |
-| `docs/` | Design notes. |
+| `docs/` | [System design](docs/design.md) and notes. |
 | `tests/` | pytest suite, run in CI on every push/PR. |
