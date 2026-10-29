@@ -10,7 +10,9 @@ report where each claim links to its source.
 > verifier; an independent judge agrees with 66% of sampled citations.
 > ([baseline](eval/results/baseline-2026-10-28/summary.md), 28 Oct 2026)
 
-Status: **M12a — production-ready** (migrations, HTTPS stack, public-access limits); AWS deploy next. `POST /research` returns a job id
+Status: **complete**: built and tested end to end. It isn't hosted yet; the cloud deploy
+will come together with the related projects (see [What's next](#whats-next)).
+`POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -258,7 +260,7 @@ py -m scout.eval run --tags web --database-url sqlite:///scout_eval.db   # no Po
 This **costs money**: it runs the real agent and judges. It stops starting new cases at
 `--max-cost-gbp` (default £5). Results go to `runs/eval/<time>/` (`results.jsonl` with
 each case's Langfuse trace id, `summary.json`, `summary.md`). `--min-task-success 0.8`
-exits 1 below that, which is the eval gate for the deploy pipeline. Docs cases need
+exits 1 below that, so it can gate a deploy pipeline. Docs cases need
 Postgres + pgvector; on SQLite they're skipped.
 
 On GitHub: **Actions → eval → Run workflow**. Set `tags` to `ci` or `all`, or list `ids`. It needs the
@@ -380,6 +382,18 @@ npx @modelcontextprotocol/inspector py -m scout.tools.server
   - `DAILY_BUDGET_GBP`: once all users together could pass this day's research spend,
     new jobs get 503 until midnight UTC.
   - Both are off by default for local development.
+
+## What's next
+
+Scout is one of four connected projects:
+- **Gearbox:** an LLM router. Scout's single `LLMClient` can point at it (`llm.base_url`).
+- **Dyno:** an eval harness. It loads `eval/golden.yaml` and Scout's trajectories, and
+  will drive the fix for the weakest area, questions needing both web and documents
+  (1/10 in the baseline).
+- **Pitwall:** LLMOps (deploy, monitor, retrain).
+
+When all four are built they'll be deployed together. The production stack in `deploy/`
+is already done.
 
 ## Dev setup
 

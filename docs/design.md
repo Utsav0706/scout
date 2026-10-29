@@ -89,6 +89,13 @@ flowchart LR
   database access, so it can run anywhere.
 - **On a Windows laptop,** where RQ workers can't run, `JOBS_MODE=inline` makes the API run
   jobs itself with the same job code.
+- **In production** ([`deploy/docker-compose.prod.yml`](../deploy/docker-compose.prod.yml)):
+  - one server runs the same containers
+  - images are pulled from GitHub's registry
+  - **Caddy** is the only public service, with automatic HTTPS for the UI and
+    `api.<host>`
+  - Postgres and Redis are private
+  - a one-off `migrate` container runs Alembic before the API and worker start
 
 ---
 
@@ -236,6 +243,7 @@ flowchart LR
 | Runaway cost or loops | `RunBudget`: 50 model calls, £0.20, 180 s per report. Checked before every model call. A hit returns a **partial** report with the reason. | `agent/budget.py`, `config.yaml limits` |
 | Spending everything on research | `finish_reserve_gbp: 0.08`: research stops early to leave money for writing and verifying | `agent/nodes.py` |
 | Abuse or overload | Per user: ≤2 jobs at once, ≤10 per hour (429 + `Retry-After`) | `api/routes_research.py` |
+| Strangers spending the API credit (public deploy) | Signing up needs an invite code (`REGISTRATION_CODE`, constant-time check). A global daily cap (`DAILY_BUDGET_GBP`) refuses new jobs with 503 once today's spend could pass it, counting queued and running jobs at their maximum cost. | `api/routes_auth.py`, `api/routes_research.py` |
 | Prompt injection in pages and PDFs | Hidden Unicode stripped; our own XML-style tags neutralised; scanner flags instruction-like text; flagged sources are marked in the prompt and noted in the report's limitations | `safety/injection.py` |
 | Being steered to an attacker's URL | `fetch_url` opens only links this job's search returned, or links in the question | `tools/context.py` |
 | SSRF (reaching internal hosts) | Only http/https on standard ports; every resolved IP must be public, checked again on each redirect | `tools/netguard.py` |
@@ -266,8 +274,11 @@ instructions, and all 4 were flagged.
 | `notes` | reader notes per job | Written through the `save_note` tool |
 | `feedback` | 👍/👎 + comment per user and job | Also sent to Langfuse as a score |
 
-The schema is created with `create_all`. Before the first cloud deploy, schema changes
-move to Alembic migrations, because `create_all` can't add a column to an existing table.
+**Schema changes go through Alembic migrations** (`migrations/`).
+- `tests/test_migrations.py` applies them to an empty database and runs `alembic check`,
+  so a model change without a migration fails CI.
+- `create_all` remains only as a convenience for tests and local SQLite. On an
+  already-migrated database it does nothing.
 
 ---
 
@@ -343,7 +354,6 @@ Full table in the [README](../README.md#baseline-results-28-oct-2026-commit-1ee4
   lenient or the judge too strict. Human-labelled examples (Dyno's calibration step) will
   tell which.
 - **One judge family:** the eval judge is also an Anthropic model.
-- **Schema migrations:** `create_all` needs replacing with Alembic before the cloud deploy.
 - **Single worker:** one worker process; jobs queue behind each other.
-- **Deployment:** the cloud deploy (AWS, with an eval gate in the pipeline) is the next
-  milestone.
+- **Deployment:** the production stack (`deploy/`) is built and checked in CI, but not
+  yet running in the cloud. It will be deployed together with the related projects (Gearbox, Dyno, Pitwall).
