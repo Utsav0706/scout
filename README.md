@@ -40,6 +40,7 @@ behind each choice, is in **[docs/design.md](docs/design.md)**.
 
 More docs:
 - [How Scout relates to my MSc game AI (FSM vs Utility AI)](docs/glitch-vs-scout.md)
+- [FAQ: common questions about running and trusting Scout](docs/faq.md)
 
 ## Ask a question
 
