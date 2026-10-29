@@ -1,0 +1,56 @@
+# Build the production images and push them to GitHub's container registry (free for
+# a public repo). ARM64, to match the AWS Graviton server, built natively on GitHub's
+# free ARM runners (emulating ARM on x86 would take far longer with torch inside).
+#
+# Run by hand from the Actions tab, or called by the deploy workflow.
+name: images
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      tag:
+        description: "The image tag that was pushed (the commit SHA)"
+        value: ${{ jobs.build.outputs.tag }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        include:
+          - name: scout-api
+            dockerfile: Dockerfile
+          - name: scout-ui
+            dockerfile: Dockerfile.ui
+    outputs:
+      tag: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/utsav0706/${{ matrix.name }}:${{ github.sha }}
+            ghcr.io/utsav0706/${{ matrix.name }}:latest
+          # Links the image to this repo on GitHub (and its public visibility).
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

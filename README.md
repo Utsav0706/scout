@@ -10,7 +10,7 @@ report where each claim links to its source.
 > verifier; an independent judge agrees with 66% of sampled citations.
 > ([baseline](eval/results/baseline-2026-10-28/summary.md), 28 Oct 2026)
 
-Status: **M11 — docs complete** (design doc, GLITCH comparison). `POST /research` returns a job id
+Status: **M12a — production-ready** (migrations, HTTPS stack, public-access limits); AWS deploy next. `POST /research` returns a job id
 at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}` returns
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
@@ -366,6 +366,21 @@ set SCOUT_MCP_USER_EMAIL=you@example.com
 npx @modelcontextprotocol/inspector py -m scout.tools.server
 ```
 
+## Production
+
+- **`deploy/docker-compose.prod.yml`** runs the whole stack on one server. Images come
+  from GitHub's container registry, built for ARM by `.github/workflows/images.yml`.
+  **Caddy** is the only public service, with automatic HTTPS for the UI and
+  `api.<host>`. Postgres and Redis stay private.
+- **Migrations:** Alembic (`migrations/`) runs before the API and worker start. After
+  changing `src/scout/models.py`, run `alembic revision --autogenerate -m "..."`.
+  `tests/test_migrations.py` fails if the models and migrations disagree.
+- **Public-access limits,** set in `.env`:
+  - `REGISTRATION_CODE`: signing up needs this invite code.
+  - `DAILY_BUDGET_GBP`: once all users together could pass this day's research spend,
+    new jobs get 503 until midnight UTC.
+  - Both are off by default for local development.
+
 ## Dev setup
 
 Needs Python 3.12+.
@@ -408,6 +423,8 @@ pytest
 | `src/scout/ui/` | `ScoutClient` (HTTP client for the API) and the Streamlit pages. |
 | `ui/app.py` | Streamlit entry point. |
 | `scripts/` | Dev launchers, compose smoke test, red-team run. |
+| `deploy/` | Production compose file and Caddyfile. |
+| `migrations/` | Alembic schema migrations. |
 | `Dockerfile`, `Dockerfile.ui` | API/worker image; lean UI image. |
 | `prompts/` | Versioned prompt files (from M4). |
 | `src/scout/eval/` | Golden-set eval: cases, corpus, scorers, judges, runner. |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -11,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from scout.api.deps import CurrentUser, DbSession
 from scout.auth import create_access_token, hash_password, verify_password
 from scout.models import User
-from scout.schemas import Credentials, TokenOut, UserOut
+from scout.schemas import Credentials, Registration, TokenOut, UserOut
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -22,7 +23,12 @@ _DUMMY_HASH = hash_password("timing-equaliser-not-a-real-password")
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def register(body: Credentials, db: DbSession) -> User:
+def register(body: Registration, request: Request, db: DbSession) -> User:
+    code: str | None = request.app.state.registration_code
+    # compare_digest: the check takes the same time however much of the code is right.
+    if code and not hmac.compare_digest((body.invite_code or "").encode(), code.encode()):
+        log.info("registration refused: wrong invite code")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "A valid invite code is needed to sign up")
     user = User(email=body.email, password_hash=hash_password(body.password))
     db.add(user)
     try:

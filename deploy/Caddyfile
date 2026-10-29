@@ -1,0 +1,18 @@
+# Caddy: the only service reachable from the internet. It gets and renews HTTPS
+# certificates from Let's Encrypt automatically for both names below.
+# SCOUT_HOST is e.g. 1-2-3-4.sslip.io (a free name that points at the server's IP).
+
+# The web UI (Streamlit; Caddy passes its WebSocket through as-is).
+{$SCOUT_HOST} {
+	encode zstd gzip
+	reverse_proxy ui:8501
+}
+
+# The HTTP API, for other clients such as Dyno. Interactive docs at /docs.
+api.{$SCOUT_HOST} {
+	# No compression here: it could hold back live-progress events (server-sent
+	# events). flush_interval -1 sends each one to the browser straight away.
+	reverse_proxy api:8000 {
+		flush_interval -1
+	}
+}

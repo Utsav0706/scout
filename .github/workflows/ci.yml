@@ -61,6 +61,19 @@ jobs:
       - name: Write a .env with a throwaway JWT secret
         run: echo "JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" > .env
 
+      # The production files aren't run here (they pull released images), but a typo in
+      # them should fail CI, not a deploy.
+      - name: Check the production compose file and Caddyfile
+        working-directory: deploy
+        run: |
+          echo "POSTGRES_PASSWORD=ci" > .env
+          echo "SCOUT_HOST=example.test" >> .env
+          docker compose -f docker-compose.prod.yml config -q
+          docker run --rm -e SCOUT_HOST=example.test \
+            -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8-alpine \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          rm .env
+
       - name: Start the stack
         run: docker compose up -d --build --wait --wait-timeout 300
 

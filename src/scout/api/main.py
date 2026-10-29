@@ -84,6 +84,9 @@ def create_app(
     app = FastAPI(title="Scout", version=__version__, lifespan=lifespan)
     app.state.config = config
     app.state.jwt_secret = jwt_secret
+    code = secrets.registration_code
+    app.state.registration_code = code.get_secret_value() if code else None
+    app.state.daily_budget_gbp = secrets.daily_budget_gbp
     # Feedback -> Langfuse score (None without Langfuse keys); tests inject a fake.
     app.state.send_score = score_sender or langfuse_score_sender(secrets)
     app.state.engine = engine

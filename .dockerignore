@@ -6,3 +6,6 @@
 .ruff_cache
 tests
 docs
+runs
+eval/results
+*.db

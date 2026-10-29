@@ -1,0 +1,127 @@
+# Production stack for one server. On the server this folder holds just three files:
+# this one, Caddyfile and .env (written at deploy time from AWS Secrets Manager).
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Differences from the development docker-compose.yml:
+# - images are pulled from GitHub's registry (built by .github/workflows/images.yml),
+#   not built on the server
+# - Caddy is the only thing listening on the internet (80/443, automatic HTTPS);
+#   Postgres, Redis and the API's own port stay on the private compose network
+# - a one-off "migrate" service runs Alembic before the API and worker start
+# - memory limits sized for a 4 GB machine (plus 2 GB swap)
+
+name: scout
+
+x-app: &app
+  image: ghcr.io/utsav0706/scout-api:${IMAGE_TAG:-latest}
+  env_file: .env
+  environment: &app-env
+    DATABASE_URL: postgresql+psycopg://scout:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/scout
+    REDIS_URL: redis://redis:6379/0
+    JOBS_MODE: rq
+  volumes:
+    - hf_cache:/home/scout/.cache/huggingface
+  restart: unless-stopped
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SCOUT_HOST: ${SCOUT_HOST:?set SCOUT_HOST in .env, e.g. 1-2-3-4.sslip.io}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # HTTPS certificates: keep them, or Let's Encrypt rate limits bite
+      - caddy_config:/config
+    depends_on:
+      - ui
+      - api
+    restart: unless-stopped
+    mem_limit: 128m
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: scout
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: scout
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scout -d scout"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    mem_limit: 512m
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "48mb",
+              "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    mem_limit: 64m
+
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 512m
+
+  api:
+    <<: *app
+    # --proxy-headers: log the visitor's address (from Caddy), not Caddy's.
+    command: ["uvicorn", "scout.api.main:create_app", "--factory", "--host", "0.0.0.0",
+              "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+    mem_limit: 768m
+
+  worker:
+    <<: *app
+    command: ["rq", "worker", "scout", "--url", "redis://redis:6379/0",
+              "--worker-class", "rq.worker.SimpleWorker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    mem_limit: 1200m
+
+  ui:
+    image: ghcr.io/utsav0706/scout-ui:${IMAGE_TAG:-latest}
+    environment:
+      SCOUT_API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 384m
+
+volumes:
+  pgdata:
+  redisdata:
+  hf_cache:
+  caddy_data:
+  caddy_config:

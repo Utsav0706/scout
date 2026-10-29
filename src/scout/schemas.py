@@ -24,6 +24,11 @@ class Credentials(BaseModel):
         return v.strip().lower()
 
 
+class Registration(Credentials):
+    # Needed only when the server sets REGISTRATION_CODE (public deployments).
+    invite_code: str | None = Field(default=None, max_length=200)
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"

@@ -52,9 +52,10 @@ def login_page(c: ScoutClient) -> None:
     with register_tab, st.form("register"):
         email = st.text_input("Email", key="reg_email")
         password = st.text_input("Password (8+ characters)", type="password", key="reg_pw")
+        invite = st.text_input("Invite code (if you were given one)", key="reg_invite")
         if st.form_submit_button("Create account"):
             try:
-                c.register(email, password)
+                c.register(email, password, invite.strip() or None)
                 c.login(email, password)
                 st.rerun()
             except ScoutError as exc:

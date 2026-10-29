@@ -66,8 +66,11 @@ class ScoutClient:
 
     # --- account ---
 
-    def register(self, email: str, password: str) -> None:
-        self._request("POST", "/auth/register", json={"email": email, "password": password})
+    def register(self, email: str, password: str, invite_code: str | None = None) -> None:
+        body = {"email": email, "password": password}
+        if invite_code:
+            body["invite_code"] = invite_code
+        self._request("POST", "/auth/register", json=body)
 
     def login(self, email: str, password: str) -> None:
         body = self._request("POST", "/auth/login", json={"email": email, "password": password})

@@ -166,7 +166,11 @@ class AppConfig(BaseModel):
 class Secrets(BaseSettings):
     """Read from env vars, falling back to a local .env file."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    # env_ignore_empty: a blank line such as "DAILY_BUDGET_GBP=" (as in .env.example)
+    # means "not set", not an empty value.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", env_ignore_empty=True
+    )
 
     anthropic_api_key: SecretStr | None = None
     openai_api_key: SecretStr | None = None
@@ -183,6 +187,12 @@ class Secrets(BaseSettings):
     # Signs login tokens. Checked at startup (see auth.require_jwt_secret), not here,
     # so config-only tools and tests can run without one.
     jwt_secret: SecretStr | None = None
+    # Public deployments: when set, signing up needs this invite code, so strangers
+    # can't create accounts that spend your API credit.
+    registration_code: SecretStr | None = None
+    # Public deployments: the most all users together may spend on research per UTC day.
+    # Once reached, new jobs get 503 until midnight. None = no cap (local development).
+    daily_budget_gbp: float | None = Field(default=None, gt=0)
     log_level: str = "INFO"
     config_path: Path = Path("config.yaml")
 

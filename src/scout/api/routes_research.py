@@ -19,6 +19,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from scout.api.deps import CurrentUser, DbSession
+from scout.config import AppConfig
 from scout.jobs.queue import QueueUnavailableError
 from scout.jobs.runner import TERMINAL
 from scout.models import Feedback, JobEvent, JobTrajectory, ResearchJob
@@ -43,6 +44,35 @@ router = APIRouter(prefix="/research", tags=["research"])
 def _aware(dt: datetime | None) -> datetime | None:
     # SQLite hands back naive datetimes even for timezone-aware columns; they're UTC.
     return dt.replace(tzinfo=UTC) if dt is not None and dt.tzinfo is None else dt
+
+
+def _check_daily_budget(db: Session, budget_gbp: float | None, config: AppConfig) -> None:
+    """Refuse new jobs once today's research spend (all users, UTC day) could pass the
+    cap. Jobs still queued or running count at their maximum cost, since what they will
+    spend isn't known yet."""
+    if budget_gbp is None:
+        return
+    now = datetime.now(UTC)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    spent = db.scalar(
+        select(func.coalesce(func.sum(ResearchJob.cost_gbp), 0.0)).where(
+            ResearchJob.created_at >= midnight, ResearchJob.status.not_in(("queued", "running"))
+        )
+    )
+    in_flight = db.scalar(
+        select(func.count())
+        .select_from(ResearchJob)
+        .where(ResearchJob.status.in_(("queued", "running")))
+    )
+    committed = spent + in_flight * config.limits.max_cost_gbp
+    if committed + config.limits.max_cost_gbp > budget_gbp:
+        seconds = int((midnight + timedelta(days=1) - now).total_seconds())
+        log.warning("daily research budget reached", extra={"committed_gbp": round(committed, 4)})
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Today's research budget for this demo is used up. Please try again tomorrow.",
+            headers={"Retry-After": str(max(1, seconds))},
+        )
 
 
 @router.post("", response_model=JobCreatedOut, status_code=status.HTTP_202_ACCEPTED)
@@ -78,6 +108,8 @@ def start_research(
             f"Limit of {limits.max_per_hour_per_user} research jobs per hour reached.",
             headers={"Retry-After": str(max(1, math.ceil(wait)))},
         )
+
+    _check_daily_budget(db, request.app.state.daily_budget_gbp, request.app.state.config)
 
     if findings := scan(body.question):
         # Logged, not refused: it's the user's own agent, and its tools are read-only.
