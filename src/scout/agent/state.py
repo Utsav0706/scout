@@ -54,6 +54,7 @@ class ResearchState(TypedDict, total=False):
     summary: str
     sections: list[Any]  # list[report.Section]
     writer_limitations: list[str]
+    follow_ups: list[str]  # from the writer's first draft; see DraftOut.follow_ups
     notes_at_write: int  # len(notes) when the writer last wrote
     verification: Any  # report.Verification | None
     problems: Annotated[list[str], operator.add]  # non-fatal issues for "limitations"
@@ -108,6 +109,10 @@ class DraftOut(BaseModel):
     summary: str
     sections: list[DraftSection]
     limitations: list[str]
+    # Searchable questions for what the notes left unanswered (writer v3), written with
+    # facts already found ("Which river flows through Coventry?"). They feed the
+    # reviser's one retry round, so a partly answered question gets a second search.
+    follow_ups: list[str] = Field(default_factory=list)
 
 
 class ClaimVerdict(BaseModel):
