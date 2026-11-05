@@ -94,8 +94,8 @@ tools:
 agent:
   max_sub_questions: 4
   max_tool_turns: 3          # tool-calling rounds per researcher
-  max_sources_to_read: 8     # reader calls in the first research round
-  max_source_chars: 8000     # source text sent to the reader and verifier, per source
+  max_sources_to_read: 2     # reader calls in the first research round
+  max_source_chars: 1500     # source text sent to the reader and verifier, per source
   max_notes_per_source: 5
   # One extra research round for sub-questions left with no sources, or whose claims
   # all failed verification. Never more than one.
