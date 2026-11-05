@@ -1,0 +1,171 @@
+# Dyno gate: run the golden set's 5 `ci` cases against the base branch and against the
+# pull request, and fail this check if the pull request scores worse. Uses Dyno's
+# GitHub Action (https://github.com/Utsav0706/dyno/blob/main/docs/ci-gate.md).
+#
+# Runs only when a pull request gets the label `eval`: it costs real money (about
+# GBP 0.30 a run: two Scout runs plus Dyno's judges). To run it again, remove the label
+# and add it back.
+#
+# Needs repo secrets ANTHROPIC_API_KEY and TAVILY_API_KEY. GitHub doesn't pass secrets to
+# pull requests from forks, so it only works for branches in this repo.
+name: dyno-gate
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+# Shares the eval workflow's group: two paid runs at once would double the spend.
+concurrency:
+  group: eval
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.event.label.name == 'eval'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: scout
+          POSTGRES_PASSWORD: scout
+          POSTGRES_DB: scout_base
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U scout -d scout_base"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Scout's spend cap per run (GBP). Scout reserves 0.20 per job, so a run stops
+      # starting jobs once spend passes cap - 0.20; 5 cases cost about 0.13.
+      DAILY_BUDGET_GBP: "0.40"
+      JUDGE_BUDGET_GBP: "0.20"
+
+    steps:
+      - name: Check out the base branch and the pull request
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr
+
+      # Dyno's Scout suite (scorers) and its eval setup script.
+      - uses: actions/checkout@v4
+        with:
+          repository: Utsav0706/dyno
+          path: dyno
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Scout (base)
+        run: |
+          python -m venv scout-venv
+          scout-venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          scout-venv/bin/pip install -q -e ./base
+
+      # The embedding and reranker models (~200 MB), so they download once, not per run.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-models-${{ hashFiles('base/config.yaml') }}
+
+      - name: Prepare the base run (eval config, corpus PDFs)
+        run: scout-venv/bin/python dyno/scripts/scout_eval_setup.py base setup-base
+
+      - name: Start Scout (base)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          DATABASE_URL: postgresql+psycopg://scout:scout@localhost:5432/scout_base
+          CONFIG_PATH: ${{ github.workspace }}/setup-base/config.eval.yaml
+          JOBS_MODE: inline
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ] || [ -z "$TAVILY_API_KEY" ]; then
+            echo "::error::Add the ANTHROPIC_API_KEY and TAVILY_API_KEY repo secrets first."
+            exit 1
+          fi
+          export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          nohup scout-venv/bin/python base/scripts/dev_api.py > scout-base.log 2>&1 &
+          echo $! > scout.pid
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8001/health; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Scout (base) did not start"; cat scout-base.log; exit 1
+
+      # The cases come from the base branch for both runs, so a pull request can't
+      # change its own test.
+      - name: Dyno, baseline
+        uses: Utsav0706/dyno@main
+        env:
+          SCOUT_CORPUS_DIR: ${{ github.workspace }}/setup-base/corpus
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          role: baseline
+          suite: dyno/suites/scout.yaml
+          cases: base/eval/golden.yaml
+          run-args: --tags ci
+
+      - name: Switch to the pull request's code
+        run: |
+          kill "$(cat scout.pid)" && sleep 3
+          scout-venv/bin/pip install -q -e ./pr
+          scout-venv/bin/python dyno/scripts/scout_eval_setup.py pr setup-pr
+          PGPASSWORD=scout psql -h localhost -U scout -d scout_base -c "CREATE DATABASE scout_pr"
+
+      - name: Start Scout (pull request)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          DATABASE_URL: postgresql+psycopg://scout:scout@localhost:5432/scout_pr
+          CONFIG_PATH: ${{ github.workspace }}/setup-pr/config.eval.yaml
+          JOBS_MODE: inline
+        run: |
+          export JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          nohup scout-venv/bin/python pr/scripts/dev_api.py > scout-pr.log 2>&1 &
+          for i in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:8001/health; then echo; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Scout (pull request) did not start"; cat scout-pr.log; exit 1
+
+      # task_rubric: the judge that agrees with hand labels (kappa 1.0). On 5 cases one
+      # case is 20 points, so a 20-point allowance tolerates one case flipping by chance
+      # and still blocks a change that breaks two or more.
+      - name: Dyno, pull request vs base
+        uses: Utsav0706/dyno@main
+        env:
+          SCOUT_CORPUS_DIR: ${{ github.workspace }}/setup-base/corpus
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          role: candidate
+          suite: dyno/suites/scout.yaml
+          cases: base/eval/golden.yaml
+          run-args: --tags ci
+          metric: task_rubric
+          max-drop: "20"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dyno-gate
+          path: |
+            dyno-gate.db
+            scout-base.log
+            scout-pr.log
+          retention-days: 30
+          if-no-files-found: ignore
