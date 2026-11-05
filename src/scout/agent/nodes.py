@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from langgraph.runtime import Runtime
@@ -313,7 +314,26 @@ async def writer(state: ResearchState, runtime: Runtime[AgentDeps]) -> dict[str,
         "sections": sections,
         "writer_limitations": limitations,
         "notes_at_write": len(notes),
+        "follow_ups": clean_follow_ups(draft.follow_ups),
     }
+
+
+MAX_FOLLOW_UPS = 2
+MAX_FOLLOW_UP_CHARS = 200
+_URL = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
+
+
+def clean_follow_ups(follow_ups: list[str]) -> list[str]:
+    """At most 2 short follow-up questions, links removed. The writer has read web pages,
+    so a follow-up is untrusted text; it can't widen fetch_url's allow-list anyway (that
+    comes from the user's question and search results), and dropping links keeps a
+    planted page from steering a search towards a site it names."""
+    out = []
+    for q in follow_ups:
+        q = " ".join(_URL.sub("", q).split())[:MAX_FOLLOW_UP_CHARS]
+        if len(q) >= 5 and q not in out:
+            out.append(q)
+    return out[:MAX_FOLLOW_UPS]
 
 
 def _clean_draft(draft: DraftOut, known: set[str]) -> tuple[list[Section], int]:

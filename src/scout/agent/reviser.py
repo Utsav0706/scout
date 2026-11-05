@@ -3,8 +3,10 @@
 Two jobs, in this order:
 1. Retry research, at most once. If a sub-question ended with no sources read, or every
    claim drawn from its sources failed verification, send it back to the researchers
-   with a hint to search differently. The new notes then go through writer -> verifier
-   -> reviser again; the second time round there is no retry.
+   with a hint to search differently. After those, the writer's follow-up questions
+   (what the draft still couldn't answer, e.g. "Which river flows through Coventry?")
+   go too, with a hint to search for that piece directly. The new notes then go
+   through writer -> verifier -> reviser again; the second time round there is no retry.
 2. Revise. If every claim passed: no model call, the report passes straight through.
    Otherwise one model call rewrites or deletes each failed claim and rewrites the
    summary from the claims that passed. Every rewrite is verified again (same rules as
@@ -32,6 +34,11 @@ RETRY_HINT = (
     "support what was written from them. Try different search terms or different kinds "
     "of sources, and read at least one page."
 )
+FOLLOW_UP_HINT = (
+    "The report so far is missing exactly this piece of information. Search for it "
+    "directly, using the names and figures in the question, and read at least one page "
+    "that states it."
+)
 
 
 def gap_questions(state: ResearchState, limit: int) -> list[str]:
@@ -50,6 +57,9 @@ def gap_questions(state: ResearchState, limit: int) -> list[str]:
             for q in {question_of[s] for s in claim.source_ids if s in question_of}:
                 verdicts.setdefault(q, []).append(claim.verdict)
     gaps += [q for q, vs in verdicts.items() if q not in gaps and all(v in FAILED for v in vs)]
+    # Then what the draft still couldn't answer (writer v3), unless already planned.
+    asked = set(state.get("sub_questions", []))
+    gaps += [q for q in state.get("follow_ups", []) if q not in gaps and q not in asked]
     return gaps[:limit]
 
 
@@ -157,6 +167,7 @@ def after_reviser(state: ResearchState) -> list[Send] | str:
     questions = state.get("retry_questions") or []
     if not questions:
         return "finaliser"
+    follow_ups = set(state.get("follow_ups", []))
     return [
         Send(
             "researcher",
@@ -164,7 +175,7 @@ def after_reviser(state: ResearchState) -> list[Send] | str:
                 question=state["question"],
                 sub_question=q,
                 search_plan=state.get("search_plan", ""),
-                hint=RETRY_HINT,
+                hint=FOLLOW_UP_HINT if q in follow_ups else RETRY_HINT,
             ),
         )
         for q in questions

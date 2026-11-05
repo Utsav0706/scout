@@ -6,9 +6,9 @@ import httpx
 import pytest
 
 from scout.agent.report import Claim, Section
-from scout.agent.reviser import RETRY_HINT, gap_questions
+from scout.agent.reviser import FOLLOW_UP_HINT, RETRY_HINT, gap_questions
 from scout.agent.state import ClaimRevision, ClaimVerdict, Evidence, ReviseOut, VerifyOut
-from scout.llm.client import LLMError
+from scout.llm.client import LLMError, LLMResult
 from tests.test_agent import CONFIG, SUBS, default_script, result, run, web
 
 DRIVERS = "drove"  # the second sub-question's page path contains this word
@@ -264,3 +264,70 @@ def test_one_passing_claim_means_no_retry_for_that_question() -> None:
 def test_unverified_claims_do_not_trigger_a_retry() -> None:
     state = _state(["a", "b", "c"], [("S1", "unverified")])
     assert gap_questions(state, limit=5) == []
+
+
+# --- writer follow-ups (writer v3) ---
+
+
+def test_follow_ups_come_after_the_usual_gaps() -> None:
+    state = _state(["a", "b"], [("S0", "supported"), ("S1", "unsupported")])
+    state["follow_ups"] = ["Which river flows through Coventry?", "a"]  # "a" already planned
+    assert gap_questions(state, limit=5) == ["c", "b", "Which river flows through Coventry?"]
+    assert gap_questions(state, limit=2) == ["c", "b"]  # never more than the retry limit
+
+
+def test_follow_up_alone_triggers_the_retry() -> None:
+    state = _state(["a", "b", "c"], [("S0", "supported")])
+    assert gap_questions(state, limit=2) == []
+    state["follow_ups"] = ["What was the adult rate in April 1999?"]
+    assert gap_questions(state, limit=2) == ["What was the adult rate in April 1999?"]
+
+
+def test_follow_ups_get_their_own_search_hint() -> None:
+    from scout.agent.reviser import after_reviser
+
+    sends = after_reviser(
+        {
+            "question": "q",
+            "retry_questions": ["b", "Which river flows through Coventry?"],
+            "follow_ups": ["Which river flows through Coventry?"],
+        }
+    )
+    hints = {s.arg["sub_question"]: s.arg["hint"] for s in sends}
+    assert hints == {"b": RETRY_HINT, "Which river flows through Coventry?": FOLLOW_UP_HINT}
+
+
+def test_clean_follow_ups() -> None:
+    from scout.agent.nodes import clean_follow_ups
+
+    raw = [
+        "Which river flows through Coventry? see https://evil.example/x now",
+        "Which river flows through Coventry? see now",  # same after the link goes
+        "ok?",  # too short
+        "x" * 500,
+        "Third question",
+    ]
+    assert clean_follow_ups(raw) == ["Which river flows through Coventry? see now", "x" * 200]
+
+
+@pytest.mark.anyio
+async def test_draft_follow_up_gets_one_targeted_search(db_factory) -> None:
+    """The whole loop: a first draft that leaves a piece unanswered names it, the retry
+    round searches for exactly that piece with the follow-up hint, and the report is
+    rewritten with the new notes."""
+    follow_up = "Which river flows through Coventry?"
+
+    def s(node, kw):
+        res = default_script(node, kw)
+        if node == "writer" and isinstance(res, LLMResult):
+            res.parsed.follow_ups = [follow_up]
+        return res
+
+    report, llm, _ = await run(db_factory, script=s)
+    # Each researcher's opening message (the message list grows over its turns).
+    openings = {kw["messages"][0]["content"] for n, kw in llm.calls if n == "researcher"}
+    retried = [c for c in openings if c.startswith(follow_up)]
+    assert len(retried) == 1 and FOLLOW_UP_HINT in retried[0]  # one targeted search
+    assert hinted(llm) == []  # not the generic "found nothing" retry
+    assert llm.nodes().count("writer") == 2  # rewritten once with the new notes
+    assert report.status == "complete"

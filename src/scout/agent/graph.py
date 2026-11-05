@@ -42,11 +42,13 @@ log = logging.getLogger(__name__)
 #   verifier v3: up to 3 quotes per claim, so a claim combining facts from different
 #                sentences can be backed without stitching them into one quote.
 #   writer v2:   one fact per claim; compound claims caused both verifier mistakes in M5a.
+#   writer v3:   also suggests follow-up searches for what the notes left unanswered
+#                (Dyno's baseline: most failures stopped at "the sources don't give X").
 PROMPT_VERSIONS = {
     "planner": 1,
     "researcher": 1,
     "reader": 1,
-    "writer": 2,
+    "writer": 3,
     "verifier": 3,
     "reviser": 1,
 }
