@@ -17,6 +17,17 @@ at once; `GET /research/{id}/stream` streams live progress; `GET /research/{id}`
 the report. PDF uploads are processed by the worker too.
 Every claim in the report has been checked against the source text it cites.
 
+## What it looks like
+
+Asking a question: each step of the research streams in live, then the report appears.
+
+![Live research progress in Scout's web app](docs/images/live_progress.gif)
+
+Every claim has a verdict badge and a **Sources** pop-up with the link and the exact
+sentence the verifier matched, checked word for word in code:
+
+![A claim's Sources pop-up showing the verified quote](docs/images/sources_popup.png)
+
 ## Architecture
 
 ```mermaid
