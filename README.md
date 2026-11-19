@@ -404,8 +404,9 @@ Scout is one of four connected projects:
   (1/10 in the baseline).
 - **Pitwall:** LLMOps (deploy, monitor, retrain).
 
-When all four are built they'll be deployed together. The production stack in `deploy/`
-is already done.
+All four now run together as one system in [uv-ai-stack](https://github.com/Utsav0706/uv-ai-stack) (one command, pinned versions, a
+system test in CI); they'll be deployed together. The production stack in `deploy/` is
+already done.
 
 ## Dev setup
 
